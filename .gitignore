@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.*
+!.env.example
+.local/
+.cache/
+coverage/
+*.log
+# 官方内容样本与下载包保留在本机，避免未来误传到公开仓库
+sources/
+# 含个人课表的早期草案保留在本机；团队版本见 docs/项目方向草案.md
+docs/参赛方案-v0.1.md
