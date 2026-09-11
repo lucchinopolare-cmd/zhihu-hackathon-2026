@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="把知乎知识内容读懂，再变成自己的下一步。">
+  <title>知行小课 · 阅读工作台</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="知行小课首页">
+      <span class="brand-mark" aria-hidden="true">知</span>
+      <span><strong>知行小课</strong><small>把读到的内容，变成自己的下一步</small></span>
+    </a>
+    <div class="top-actions">
+      <span id="api-status" class="status-dot" aria-live="polite">正在连接内容库</span>
+      <button id="change-article" class="button button-quiet" type="button">换一篇内容</button>
+    </div>
+  </header>
+
+  <main class="page-shell">
+    <section class="hero" aria-labelledby="page-title">
+      <div>
+        <p class="kicker">知乎知识 · 阅读工作台</p>
+        <h1 id="page-title">读懂一点，往前一步。</h1>
+        <p class="hero-copy">不想先打字？让 AI 先帮你读；想检验自己的理解，也可以从复述开始。</p>
+      </div>
+      <div class="hero-note"><span class="note-mark">◎</span><span>回答只基于当前可读片段<br>每条依据都可以回到原文</span></div>
+    </section>
+
+    <dialog id="article-picker" class="picker-panel" aria-labelledby="picker-title">
+      <div class="picker-head"><div><p class="kicker">选择内容</p><h2 id="picker-title">现在想读什么？</h2></div><button id="close-picker" class="icon-button" type="button" aria-label="关闭内容选择">×</button></div>
+      <label class="search-field"><span class="sr-only">筛选标题</span><input id="article-search" type="search" placeholder="在已加载的内容里筛选" autocomplete="off"><span aria-hidden="true">⌕</span></label>
+      <div id="article-list" class="article-list" aria-live="polite"></div>
+    </dialog>
+
+    <section class="workbench" aria-label="学习工作台">
+      <div class="source-column">
+        <div class="column-heading"><div><p class="kicker">来源内容</p><h2>先读这一段</h2></div><span id="content-range" class="range-label">加载中</span></div>
+        <article class="source-paper">
+          <div id="source-meta" class="source-meta">正在读取知乎知识内容…</div>
+          <h3 id="article-title">—</h3>
+          <div id="article-content" class="article-content" aria-live="polite"><p class="loading-line">正在加载内容</p></div>
+          <button id="expand-source" class="button button-quiet" type="button" hidden aria-expanded="false">展开全部可读片段</button>
+          <div class="source-foot"><span>知乎知识内容</span><span id="completeness-note">基于当前可读片段</span></div>
+        </article>
+      </div>
+
+      <div class="learning-column">
+        <div class="column-heading"><div><p class="kicker">你的学习区</p><h2 id="learning-heading">从这里开始</h2></div><span id="mode-label" class="mode-label">直接 AI</span></div>
+        <div class="mode-switch" role="group" aria-label="选择学习入口">
+          <button id="direct-tab" class="mode-tab active" type="button" aria-pressed="true" aria-controls="direct-panel">AI 帮我读懂<span>不想先写也可以</span></button>
+          <button id="reflect-tab" class="mode-tab" type="button" aria-pressed="false" aria-controls="reflect-panel">我先说说理解<span>检验自己的想法</span></button>
+        </div>
+
+        <div id="direct-panel" class="mode-panel" aria-labelledby="direct-tab">
+          <div class="empty-result"><div class="empty-orbit" aria-hidden="true">✦</div><h3>把这段内容讲给我听</h3><p>AI 会提炼核心观点、适用条件和一个可调整的小行动。整个过程只使用左侧已获取的内容片段。</p><button id="direct-generate" class="button button-primary button-large" type="button">AI 帮我读懂</button></div>
+        </div>
+
+        <div id="reflect-panel" class="mode-panel" aria-labelledby="reflect-tab" hidden>
+          <label class="field-label" for="reflection">用两三句话说说你的理解</label>
+          <textarea id="reflection" class="text-input" rows="4" maxlength="3000" placeholder="作者建议什么？在什么情况下适用？可以表示存疑或不同意。"></textarea>
+          <div class="field-foot"><span>你的原话会保留，不会被 AI 覆盖。</span><button id="reflect-generate" class="button button-primary" type="button">帮我核对</button></div>
+        </div>
+
+        <div id="generation-progress" class="generation-progress" hidden role="status"><div><strong>正在阅读并整理依据…</strong><p>完成后会显示讲解和行动建议，可能需要一两分钟。</p></div><button id="cancel-generation" class="button button-quiet" type="button">取消等待</button></div>
+
+        <div id="result-panel" class="result-panel" hidden>
+          <div class="result-head"><div><p id="result-eyebrow" class="kicker">AI 讲解</p><h3 id="result-title">读懂这段内容</h3></div><button id="regenerate" class="button button-quiet" type="button">重新生成</button></div>
+          <div id="result-body" class="result-body"></div>
+          <div id="revision-panel" class="revision-panel" hidden><label class="field-label" for="revision">修订我的理解 <span>可选，不会覆盖原话</span></label><textarea id="revision" class="text-input" rows="3" maxlength="3000" placeholder="结合依据，补充或调整自己的判断。"></textarea><p class="muted-note">这里的修订保留在学习卡中，尚未重新核对。</p></div>
+          <div class="action-box"><div class="action-head"><div><p class="kicker">AI 行动建议 · 可以修改</p><h3>把理解落到一个小行动</h3></div><span class="pending-badge">待尝试</span></div><label class="field-label" for="action-task">行动</label><textarea id="action-task" class="text-input compact" rows="3" maxlength="2000"></textarea><label class="field-label" for="action-completion">完成标志</label><input id="action-completion" class="text-input" type="text" maxlength="1000"><label class="field-label" for="action-review">回顾安排 <span>可选</span></label><input id="action-review" class="text-input" type="text" maxlength="500" placeholder="例如：明晚 8 点，花 5 分钟回看">
+          </div>
+          <div class="result-actions"><span id="generation-note" class="muted-note">AI 生成 · 基于当前可读片段</span><button id="export-card" class="button button-primary" type="button">导出学习卡</button></div>
+          <p id="reflection-changed" class="muted-note" hidden>上方复述已修改。当前反馈仍对应上一次提交，可点击“帮我核对”更新。</p>
+        </div>
+
+        <div id="error-panel" class="error-panel" hidden role="alert"><strong id="error-title">暂时没能完成</strong><p id="error-message"></p><button id="retry" class="button button-quiet" type="button">再试一次</button></div>
+      </div>
+    </section>
+  </main>
+  <footer class="footer"><span id="session-note" role="status">草稿仅在当前页面保留，离开前可以导出学习卡。</span><span>知乎知识，让理解多走一步。</span></footer>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
