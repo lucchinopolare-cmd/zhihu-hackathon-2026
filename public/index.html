@@ -24,7 +24,7 @@
   <main class="page-shell">
     <section class="hero" aria-labelledby="page-title">
       <div>
-        <p class="kicker">知乎知识 · 阅读工作台</p>
+        <p id="hero-kicker" class="kicker">知乎知识 · 阅读工作台</p>
         <h1 id="page-title">读懂一点，往前一步。</h1>
         <p class="hero-copy">不想先打字？让 AI 先帮你读；想检验自己的理解，也可以从复述开始。</p>
       </div>
@@ -45,7 +45,7 @@
           <h3 id="article-title">—</h3>
           <div id="article-content" class="article-content" aria-live="polite"><p class="loading-line">正在加载内容</p></div>
           <button id="expand-source" class="button button-quiet" type="button" hidden aria-expanded="false">展开全部可读片段</button>
-          <div class="source-foot"><span>知乎知识内容</span><span id="completeness-note">基于当前可读片段</span></div>
+          <div class="source-foot"><span id="source-kind">知乎赛事内容</span><span id="completeness-note">基于当前可读片段</span></div>
         </article>
       </div>
 
@@ -90,7 +90,7 @@
       </div>
     </section>
   </main>
-  <footer class="footer"><span id="session-note" role="status">草稿仅在当前页面保留，离开前可以导出学习卡。</span><span>知乎知识，让理解多走一步。</span></footer>
+  <footer class="footer"><span id="session-note" role="status">草稿仅在当前页面保留，离开前可以导出学习卡。</span><span id="footer-source">知乎知识，让理解多走一步。</span></footer>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

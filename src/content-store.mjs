@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ZhihuKnowledgeClient } from './zhihu-knowledge.mjs';
+import { DEMO_KNOWLEDGE_LIST, getDemoKnowledgeDetail } from './demo-content.mjs';
 
 const WORK_ID_PATTERN = /^[0-9]+$/;
 const DEFAULT_SAMPLE_LIST = 'knowledge-list-2026-09-09.json';
@@ -17,8 +18,8 @@ export class ContentStoreError extends Error {
 
 /**
  * Provides normalized Zhihu knowledge data. Live mode delegates to the existing
- * credential-free client; sample mode reads only files explicitly present in
- * sources/ and fails when a requested fixture is absent.
+ * credential-free client; demo mode uses project-authored bundled material;
+ * sample mode reads only local historical files in sources/.
  */
 export class ContentStore {
   #mode;
@@ -31,8 +32,8 @@ export class ContentStore {
   #detailPromises = new Map();
 
   constructor({ mode = process.env.ZHIHU_CONTENT_MODE || 'live', client, sourcesDir, sampleListFile = DEFAULT_SAMPLE_LIST } = {}) {
-    if (mode !== 'live' && mode !== 'sample') {
-      throw new TypeError('content mode must be live or sample.');
+    if (!['live', 'demo', 'sample'].includes(mode)) {
+      throw new TypeError('content mode must be live, demo or sample.');
     }
     this.#mode = mode;
     this.#client = client ?? new ZhihuKnowledgeClient();
@@ -46,7 +47,9 @@ export class ContentStore {
     if (this.#list) return this.#list;
     if (this.#listPromise) return this.#listPromise;
     const pending = (async () => {
-      const raw = this.#mode === 'sample' ? await this.#readSampleList() : await this.#client.list();
+      const raw = this.#mode === 'demo'
+        ? DEMO_KNOWLEDGE_LIST
+        : this.#mode === 'sample' ? await this.#readSampleList() : await this.#client.list();
       if (!Array.isArray(raw)) throw new ContentStoreError('知识列表格式无效。', { code: 'CONTENT_SCHEMA', status: 502 });
       const items = raw.map((item, index) => {
         const workId = item?.work_id;
@@ -80,7 +83,10 @@ export class ContentStore {
     const pending = (async () => {
       let raw;
       try {
-        raw = this.#mode === 'sample' ? await this.#readSampleDetail(workId) : await this.#client.detail(workId);
+        raw = this.#mode === 'demo'
+          ? getDemoKnowledgeDetail(workId)
+          : this.#mode === 'sample' ? await this.#readSampleDetail(workId) : await this.#client.detail(workId);
+        if (!raw) throw new ContentStoreError('未找到该开发演示材料。', { code: 'UNKNOWN_WORK_ID', status: 404, workId });
       } catch (error) {
         if (error?.code === 'UNKNOWN_WORK_ID') {
           throw new ContentStoreError('未找到该知识内容。', { code: 'UNKNOWN_WORK_ID', status: 404, workId, cause: error });
@@ -144,7 +150,9 @@ function normalizeDetail(raw, workId, mode) {
     author,
     content: raw.content,
     paragraphs: Object.freeze(paragraphs.map((text, index) => Object.freeze({ id: `p${index + 1}`, text }))),
-    sourceUrl: `https://api.zhihu.com/km-indep-home/hackathon/v2/knowledge/${encodeURIComponent(workId)}`,
+    sourceUrl: mode === 'demo'
+      ? '项目原创开发演示材料（非知乎正式内容）'
+      : `https://api.zhihu.com/km-indep-home/hackathon/v2/knowledge/${encodeURIComponent(workId)}`,
     contentMode: mode,
   });
 }

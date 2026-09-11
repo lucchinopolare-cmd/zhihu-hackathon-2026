@@ -130,3 +130,18 @@ test('request body limit rejects oversized payload', async () => {
     assert.equal((await response.json()).error.code, 'REQUEST_TOO_LARGE');
   });
 });
+
+test('an empty live list is returned as an honest empty state', async () => {
+  const contentStore = {
+    mode: 'live',
+    list: async () => [],
+    detail: async () => { throw new Error('unused'); },
+  };
+  const modelClient = { configured: false, generate: async () => { throw new Error('unused'); } };
+  const app = createApp({ contentStore, modelClient });
+  await withServer(app, async (base) => {
+    const response = await fetch(`${base}/api/knowledge`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { items: [], contentMode: 'live' });
+  });
+});

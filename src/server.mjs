@@ -201,7 +201,7 @@ async function serveStatic(pathname, res, publicDir) {
     throw new HttpError(500, 'STATIC_ERROR', '页面资源读取失败。', error);
   }
   const ext = path.extname(filename);
-  res.writeHead(200, { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+  res.writeHead(200, { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream', 'Cache-Control': 'no-store' });
   res.end(body);
 }
 

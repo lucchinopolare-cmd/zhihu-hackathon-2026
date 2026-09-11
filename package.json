@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node --env-file-if-exists=.env src/server.mjs",
+    "demo": "node src/demo-server.mjs",
     "dev": "node --env-file-if-exists=.env --watch src/server.mjs",
     "test": "node --test --test-isolation=none tests/*.test.mjs",
     "probe": "node scripts/probe-knowledge.mjs"

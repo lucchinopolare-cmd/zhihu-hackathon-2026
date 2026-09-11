@@ -86,6 +86,7 @@ export function buildLearningCard({ article, result, reflection = '', revision =
   if (!nonEmpty(result.generatedAt)) throw new TypeError('缺少结果生成时间');
   const header = [`# ${text(article.title || '学习卡')}`, '', `- 来源作者：${text(source.author || article.author || '未知')}`,
     `- work_id：${text(article.workId)}`, `- 来源：${safeUrl(source.url || article.sourceUrl || '')}`,
+    `- 内容类型：${source.contentMode === 'demo' ? '项目原创开发演示材料（非知乎正式内容）' : source.contentMode === 'sample' ? '本机历史样本' : '知乎赛事内容（基于当前可读片段）'}`,
     `- 生成方式：${text(modeLabel)}`, `- 生成时间：${text(result.generatedAt)}`,
     '- 内容完整性：未知（基于当前可读片段）', ''].join('\n');
   const body = [section('核心观点', result.summary, index), section('适用条件', result.conditions, index), section('AI 的批判性提醒', result.cautions, index)];

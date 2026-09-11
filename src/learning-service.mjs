@@ -65,6 +65,7 @@ export class LearningService {
           title: article.title,
           author: article.author,
           url: article.sourceUrl,
+          contentMode: article.contentMode || 'live',
           completeness: 'unknown',
         },
         summary: generated.summary,

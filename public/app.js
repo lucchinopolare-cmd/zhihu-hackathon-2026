@@ -2,7 +2,7 @@ import { downloadLearningCard } from './learning-card.js';
 
 const $ = (id) => document.getElementById(id);
 const state = {
-  items: [], selectedId: null, article: null, drafts: new Map(),
+  items: [], selectedId: null, article: null, contentMode: 'live', drafts: new Map(),
   detailController: null, generationController: null, followUpController: null, selectionVersion: 0,
   generationVersion: 0, followUpVersion: 0, loading: false, followUpLoading: false, expanded: false, retry: null,
 };
@@ -49,12 +49,18 @@ async function loadRuntimeState() {
   try {
     const health = await api('/api/health');
     const demo = health.generationMode === 'demo';
+    const demoContent = health.contentMode === 'demo';
     ui.runtimeBadge.hidden = !demo;
     if (demo) {
+      ui.runtimeBadge.textContent = demoContent ? '开发演示模式' : '本地模拟演示';
+      if (demoContent) {
+        $('hero-kicker').textContent = '开发演示 · 阅读工作台';
+        $('footer-source').textContent = '项目原创演示材料，仅用于赛前开发。';
+      }
       ui.runtimeExplanation.replaceChildren(
-        document.createTextNode('当前是本地模拟演示，不调用赛事模型'),
+        document.createTextNode(demoContent ? '当前使用项目原创演示材料与预设回答' : '当前是本地模拟演示，不调用赛事模型'),
         document.createElement('br'),
-        document.createTextNode('页面结构与真实生成流程一致'),
+        document.createTextNode(demoContent ? '不调用赛事接口或赛事模型' : '页面结构与真实生成流程一致'),
       );
     }
   } catch {
@@ -93,15 +99,23 @@ async function loadList() {
   ui.generate.disabled = ui.check.disabled = true;
   try {
     const body = await api('/api/knowledge');
+    state.contentMode = body.contentMode || 'live';
     state.items = Array.isArray(body.items) ? body.items : [];
     renderPicker();
     if (!state.items.length) {
-      ui.title.textContent = '当前没有可读内容';
-      ui.content.replaceChildren(element('p', '内容库暂时为空，可以稍后重试。'));
-      ui.meta.textContent = '等待内容更新';
-      ui.range.textContent = '';
-      showError('内容库暂时为空', '还没有可供阅读的内容，请稍后再试。', loadList);
-      setStatus('暂无内容');
+      const live = state.contentMode === 'live';
+      ui.title.textContent = live ? '当前没有读取到赛事内容' : '当前没有可读内容';
+      ui.content.replaceChildren(element('p', live
+        ? '正式内容列表现在为空。赛事开放后可以重试；赛前可切换到开发演示模式继续体验。'
+        : '内容库暂时为空，可以稍后重试。'));
+      ui.meta.textContent = live ? '赛事内容可能尚未开放' : '等待内容更新';
+      ui.range.textContent = live ? '正式来源为空' : '';
+      $('source-kind').textContent = live ? '知乎赛事内容' : '当前内容源';
+      $('completeness-note').textContent = live ? '等待赛事开放' : '等待内容更新';
+      showError(live ? '没有读取到赛事内容' : '内容库暂时为空', live
+        ? '这不影响赛前开发。请让维护者启动开发演示模式；正式内容开放后再切回正式来源。'
+        : '还没有可供阅读的内容，请稍后再试。', loadList);
+      setStatus(live ? '赛事内容当前为空' : '暂无内容');
       return;
     }
     // Prefer the documented example only when it is present in the actual list.
@@ -162,12 +176,15 @@ async function selectArticle(workId) {
     if (article.workId !== workId) throw new Error('收到的内容与所选文章不一致，请重新打开。');
     state.article = article;
     ui.title.textContent = article.title || '未命名内容';
-    ui.meta.textContent = `${article.author || '作者未提供'} · 知乎知识`;
-    ui.range.textContent = article.contentMode === 'sample' ? '本机历史样本' : '当前可读片段';
-    $('completeness-note').textContent = '正文可能不完整';
+    const demo = article.contentMode === 'demo';
+    const sample = article.contentMode === 'sample';
+    ui.meta.textContent = `${article.author || '作者未提供'} · ${demo ? '项目原创演示' : sample ? '本机历史样本' : '知乎知识'}`;
+    ui.range.textContent = demo ? '开发演示材料' : sample ? '本机历史样本' : '当前可读片段';
+    $('source-kind').textContent = demo ? '项目原创演示材料' : sample ? '本机历史样本' : '知乎赛事内容';
+    $('completeness-note').textContent = demo ? '非知乎正式内容' : '正文可能不完整';
     renderSource();
     renderMode();
-    setStatus(article.contentMode === 'sample' ? '正在阅读历史样本' : '内容已就绪', 'ready');
+    setStatus(demo ? '正在使用开发演示材料' : sample ? '正在阅读历史样本' : '内容已就绪', 'ready');
     if (!article.paragraphs?.length) showError('这篇内容暂时没有正文', '可以换一篇内容继续阅读。');
   } catch (error) {
     if (version !== state.selectionVersion || error.name === 'AbortError') return;
@@ -323,7 +340,8 @@ function renderResult(current) {
   const result = current.data;
   const reflect = result.mode === 'reflect';
   const demo = result.generationMode === 'demo';
-  $('result-eyebrow').textContent = `${reflect ? 'AI 核对 · 对照当前原文' : 'AI 讲解 · 对照当前原文'}${demo ? ' · 本地模拟' : ''}`;
+  const demoContent = state.article?.contentMode === 'demo';
+  $('result-eyebrow').textContent = `${reflect ? 'AI 核对 · 对照当前原文' : 'AI 讲解 · 对照当前原文'}${demo ? demoContent ? ' · 开发演示' : ' · 本地模拟' : ''}`;
   $('result-title').textContent = reflect ? '把你的理解与原文对照' : '先抓住这段内容的结构';
   ui.regenerate.hidden = reflect;
   ui.resultBody.replaceChildren();
@@ -345,7 +363,9 @@ function renderResult(current) {
   ui.completion.value = current.completion;
   ui.review.value = current.review;
   $('generation-note').textContent = demo
-    ? '本地模拟演示 · 结构与真实模型协议一致，不代表赛事模型已接通。'
+    ? demoContent
+      ? '开发演示 · 使用项目原创材料与预设回答，不代表赛事内容或赛事模型已开放。'
+      : '本地模拟演示 · 结构与真实模型协议一致，不代表赛事模型已接通。'
     : 'AI 生成，可直接导出，也可修改后再带走。';
 }
 
