@@ -25,8 +25,8 @@ if (options.help) {
 async function probeOffline(workId) {
   const selectedWorkId = workId ?? SAMPLE_WORK_ID;
   const [listText, detailText] = await Promise.all([
-    readFile(new URL('../sources/knowledge-list-2026-09-09.json', rootUrl), 'utf8'),
-    readFile(new URL('../sources/knowledge-detail-1523701957479239680.json', rootUrl), 'utf8'),
+    readFile(new URL('sources/knowledge-list-2026-09-09.json', rootUrl), 'utf8'),
+    readFile(new URL('sources/knowledge-detail-1523701957479239680.json', rootUrl), 'utf8'),
   ]);
   const listPayload = JSON.parse(listText);
   const detailPayload = JSON.parse(detailText);

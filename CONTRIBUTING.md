@@ -11,7 +11,7 @@ git clone https://github.com/lucchinopolare-cmd/zhihu-hackathon-2026.git
 cd zhihu-hackathon-2026
 ```
 
-先读 README 和项目方向草案。当前正在组队，正式开发等待额度和 API 说明；已有骨架未验证，不把目录存在当成功能完成。
+先读根目录 [项目档案](项目档案.md)，再读 [产品需求文档](docs/产品需求文档.md) 和 README。2026-09-11 已确认允许跳过复述直接使用 AI；历史骨架本地测试与离线 probe 通过，网页、应用模型和公网验收尚未完成。产品名、技术栈与分工待确认。
 
 ## 分工和提交
 
