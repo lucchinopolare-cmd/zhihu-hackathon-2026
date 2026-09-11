@@ -82,6 +82,7 @@ async function route(req, res, ctx) {
     sendJson(res, 200, {
       ok: true,
       modelConfigured: Boolean(ctx.model.configured),
+      generationMode: ctx.model.runtimeMode === 'demo' ? 'demo' : 'live',
       contentMode: ctx.store.mode,
     });
     return;
@@ -143,6 +144,39 @@ async function route(req, res, ctx) {
       res.off('close', onClose);
     }
     sendJson(res, 200, result);
+    return;
+  }
+  if (method === 'POST' && url.pathname === '/api/follow-up') {
+    assertSameOrigin(req);
+    assertJsonContentType(req);
+    const payload = await readJsonBody(req, ctx.maxRequestBytes, ctx.bodyTimeoutMs);
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new LearningServiceError('请求体必须是 JSON 对象。', { code: 'INVALID_JSON_BODY', status: 400 });
+    }
+    const allowed = new Set(['workId', 'question']);
+    for (const key of Object.keys(payload)) {
+      if (!allowed.has(key)) throw new LearningServiceError(`请求字段 ${key} 不被支持。`, { code: 'INVALID_REQUEST', status: 400 });
+    }
+    if (typeof payload.workId !== 'string' || payload.workId.trim() === '') {
+      throw new LearningServiceError('workId 必须是非空字符串。', { code: 'INVALID_REQUEST', status: 400 });
+    }
+    const requestAbort = new AbortController();
+    const onClose = () => {
+      if (!res.writableEnded) requestAbort.abort(new Error('client disconnected'));
+    };
+    req.on('aborted', onClose);
+    res.on('close', onClose);
+    try {
+      const result = await ctx.service.followUp({
+        workId: payload.workId,
+        question: payload.question,
+        signal: requestAbort.signal,
+      });
+      sendJson(res, 200, result);
+    } finally {
+      req.off('aborted', onClose);
+      res.off('close', onClose);
+    }
     return;
   }
   if (method === 'GET') {

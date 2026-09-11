@@ -15,6 +15,7 @@
       <span><strong>知行小课</strong><small>把读到的内容，变成自己的下一步</small></span>
     </a>
     <div class="top-actions">
+      <span id="runtime-badge" class="runtime-badge" hidden>本地模拟演示</span>
       <span id="api-status" class="status-dot" aria-live="polite">正在连接内容库</span>
       <button id="change-article" class="button button-quiet" type="button">换一篇内容</button>
     </div>
@@ -27,7 +28,7 @@
         <h1 id="page-title">读懂一点，往前一步。</h1>
         <p class="hero-copy">不想先打字？让 AI 先帮你读；想检验自己的理解，也可以从复述开始。</p>
       </div>
-      <div class="hero-note"><span class="note-mark">◎</span><span>回答只基于当前可读片段<br>每条依据都可以回到原文</span></div>
+      <div class="hero-note"><span class="note-mark">◎</span><span id="runtime-explanation">回答只基于当前可读片段<br>每条依据都可以回到原文</span></div>
     </section>
 
     <dialog id="article-picker" class="picker-panel" aria-labelledby="picker-title">
@@ -56,7 +57,7 @@
         </div>
 
         <div id="direct-panel" class="mode-panel" aria-labelledby="direct-tab">
-          <div class="empty-result"><div class="empty-orbit" aria-hidden="true">✦</div><h3>把这段内容讲给我听</h3><p>AI 会提炼核心观点、适用条件和一个可调整的小行动。整个过程只使用左侧已获取的内容片段。</p><button id="direct-generate" class="button button-primary button-large" type="button">AI 帮我读懂</button></div>
+          <div class="empty-result"><div class="empty-orbit" aria-hidden="true">✦</div><h3>把这段内容讲给我听</h3><p>AI 会拆出核心主张、论证步骤、适用边界、具体场景和可调整的小行动。整个过程只使用左侧已获取的内容片段。</p><button id="direct-generate" class="button button-primary button-large" type="button">AI 帮我读懂</button></div>
         </div>
 
         <div id="reflect-panel" class="mode-panel" aria-labelledby="reflect-tab" hidden>
@@ -70,6 +71,14 @@
         <div id="result-panel" class="result-panel" hidden>
           <div class="result-head"><div><p id="result-eyebrow" class="kicker">AI 讲解</p><h3 id="result-title">读懂这段内容</h3></div><button id="regenerate" class="button button-quiet" type="button">重新生成</button></div>
           <div id="result-body" class="result-body"></div>
+          <section id="follow-up-panel" class="follow-up-panel" aria-labelledby="follow-up-title">
+            <div><p class="kicker">继续追问 · 仍只基于当前片段</p><h3 id="follow-up-title">把没讲透的地方问下去</h3></div>
+            <div id="question-prompts" class="question-prompts"></div>
+            <label class="field-label" for="follow-up-question">你的问题</label>
+            <textarea id="follow-up-question" class="text-input" rows="2" maxlength="1000" placeholder="例如：这个观点在什么情况下不成立？"></textarea>
+            <div class="follow-up-actions"><span class="muted-note">回答会带可定位的原文依据。</span><button id="ask-follow-up" class="button button-quiet" type="button">继续问</button></div>
+            <div id="follow-up-list" class="follow-up-list" aria-live="polite"></div>
+          </section>
           <div id="revision-panel" class="revision-panel" hidden><label class="field-label" for="revision">修订我的理解 <span>可选，不会覆盖原话</span></label><textarea id="revision" class="text-input" rows="3" maxlength="3000" placeholder="结合依据，补充或调整自己的判断。"></textarea><p class="muted-note">这里的修订保留在学习卡中，尚未重新核对。</p></div>
           <div class="action-box"><div class="action-head"><div><p class="kicker">AI 行动建议 · 可以修改</p><h3>把理解落到一个小行动</h3></div><span class="pending-badge">待尝试</span></div><label class="field-label" for="action-task">行动</label><textarea id="action-task" class="text-input compact" rows="3" maxlength="2000"></textarea><label class="field-label" for="action-completion">完成标志</label><input id="action-completion" class="text-input" type="text" maxlength="1000"><label class="field-label" for="action-review">回顾安排 <span>可选</span></label><input id="action-review" class="text-input" type="text" maxlength="500" placeholder="例如：明晚 8 点，花 5 分钟回看">
           </div>

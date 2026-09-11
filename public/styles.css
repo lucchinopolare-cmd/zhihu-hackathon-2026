@@ -7,6 +7,7 @@
 .brand strong{display:block;font-size:17px;line-height:1.1;letter-spacing:.02em}
 .brand small{display:block;color:var(--muted);font-size:11px;margin-top:4px}
 .top-actions{display:flex;align-items:center;gap:18px}
+.runtime-badge{color:#795b09;background:#fff1bf;border:1px solid #ead17a;border-radius:999px;padding:4px 9px;font-size:11px;font-weight:700;white-space:nowrap}
 .status-dot{color:var(--muted);font-size:12px}
 .status-dot::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:#d4a72c;margin-right:7px}
 .status-dot.ready::before{background:#38a169}
@@ -137,6 +138,19 @@
 .original-reflection summary{cursor:pointer;color:var(--muted)}
 .original-reflection p{white-space:pre-wrap}
 .result-section .statement + .statement{margin-top:10px}
+.example-card{padding:12px 14px;background:#f9fbff;border:1px solid #d9e3f2;margin-top:9px}
+.example-card strong{display:block;font-size:13px;color:var(--ink);font-weight:700}
+.example-card p{margin:4px 0 0;color:#49586d;font-size:14px;line-height:1.7}
+.follow-up-panel{border-top:1px solid var(--line);margin-top:25px;padding-top:22px}
+.follow-up-panel h3{font-family:var(--serif);font-size:19px;font-weight:500;margin:0 0 13px}
+.question-prompts{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:16px}
+.question-chip{border:1px solid #c7d7f5;background:#fbfcff;color:#315185;border-radius:999px;padding:6px 10px;font-size:12px;text-align:left}
+.question-chip:hover{border-color:var(--blue);color:var(--blue)}
+.follow-up-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:9px}
+.follow-up-list{margin-top:17px}
+.follow-up-turn{border-left:3px solid var(--blue);background:#fff;padding:13px 15px;margin-top:10px}
+.follow-up-turn strong{display:block;font-size:13px}
+.follow-up-turn p{color:#49586d;font-size:14px;line-height:1.75;margin:5px 0 9px}
 .feedback-label{display:inline-block;padding:2px 5px;margin-right:7px;font-size:12px;background:#e8f4ed;color:#236345;border-radius:3px}
 .feedback-label.missing,.feedback-label.uncertain{background:#fff1bf;color:#795b09}
 .feedback-label.overreach{background:#f9e7e8;color:#9f3840}

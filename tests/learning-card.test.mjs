@@ -7,7 +7,13 @@ const result = {
   workId: 'w-1', mode: 'direct', generatedAt: '2026-09-11T10:00:00+08:00',
   source: { workId: 'w-1', title: article.title, author: article.author, url: article.sourceUrl, completeness: 'unknown' },
   summary: [{ text: '观点 *重点* <tag>', citationIds: ['c1'] }],
+  logic: [
+    { text: '先观察问题', citationIds: ['c1'] },
+    { text: '再形成行动', citationIds: ['c1'] },
+  ],
   conditions: [{ text: '条件', citationIds: ['c1'] }], cautions: [], feedback: [],
+  examples: [{ situation: '遇到难题', application: '先做最小一步' }],
+  questions: ['哪里可能不成立？', '怎样用到我的情况？'],
   citations: [{ id: 'c1', paragraphId: 'p-2', quote: '原文 [片段] <安全>' }],
   action: { task: '试做一步', completion: '看到结果', review: '明天回顾' },
 };
@@ -16,6 +22,9 @@ test('direct export attributes AI output and does not invent user reflection', (
   const card = buildLearningCard({ article, result });
   assert.match(card, /AI 直接讲解/);
   assert.match(card, /AI 行动建议/);
+  assert.match(card, /作者的论证步骤/);
+  assert.match(card, /AI 构造的具体场景/);
+  assert.match(card, /AI 建议的继续追问/);
   assert.doesNotMatch(card, /我的行动/);
   assert.doesNotMatch(card, /用户原始复述/);
   assert.match(card, /生成时间：2026-09-11/);
@@ -35,6 +44,20 @@ test('edited action has explicit user label and remains pending', () => {
   assert.match(card, /AI 行动建议/);
   assert.match(card, /用户编辑的行动建议（待尝试）/);
   assert.match(card, /我的新行动/);
+});
+
+test('export preserves cited follow-up turns and rejects a mixed article', () => {
+  const followUps = [{
+    workId: article.workId,
+    question: '这在什么情况下成立？',
+    statements: [{ text: '先确认当前条件。', citationIds: ['f1'] }],
+    citations: [{ id: 'f1', paragraphId: 'p-3', quote: '追问所用原文' }],
+  }];
+  const card = buildLearningCard({ article, result, followUps });
+  assert.match(card, /继续追问记录/);
+  assert.match(card, /这在什么情况下成立/);
+  assert.match(card, /追问所用原文/);
+  assert.throws(() => buildLearningCard({ article, result, followUps: [{ ...followUps[0], workId: 'other' }] }), /workId/);
 });
 
 test('escapes text, validates citations, and rejects mixed articles', () => {

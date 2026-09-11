@@ -64,7 +64,21 @@ function actionLines(label, action) {
   return `## ${label}\n- 行动：${text(task || '未提供')}\n- 完成标志：${text(completion || '未提供')}\n${review ? `- 回顾安排：${text(review)}\n` : ''}\n`;
 }
 
-export function buildLearningCard({ article, result, reflection = '', revision = '', task, completion, review } = {}) {
+function followUpSections(followUps, articleWorkId) {
+  if (!Array.isArray(followUps) || !followUps.length) return '';
+  const turns = followUps.map((turn, turnIndex) => {
+    if (String(turn?.workId) !== String(articleWorkId)) throw new Error(`追问与文章 workId 不匹配：${turn?.workId} !== ${articleWorkId}`);
+    const index = citationIndex(turn);
+    const statements = Array.isArray(turn.statements) ? turn.statements : [];
+    if (!nonEmpty(turn.question) || !statements.length) throw new Error(`第 ${turnIndex + 1} 条追问不完整`);
+    const answer = statements.map((statement) => `  - ${text(statement.text)}${citationRefs(statement.citationIds, index)}`).join('\n');
+    const citations = turn.citations.map((citation, citationIndexValue) => `  - [${citationIndexValue + 1}]（段落：${text(citation.paragraphId || '未提供')}）${text(citation.quote)}`).join('\n');
+    return `- 问：${text(turn.question)}\n${answer}\n${citations}`;
+  });
+  return `## 继续追问记录\n${turns.join('\n')}\n\n`;
+}
+
+export function buildLearningCard({ article, result, reflection = '', revision = '', followUps = [], task, completion, review } = {}) {
   assertInput(article, result);
   const index = citationIndex(result);
   const source = result.source ?? article;
@@ -74,7 +88,15 @@ export function buildLearningCard({ article, result, reflection = '', revision =
     `- work_id：${text(article.workId)}`, `- 来源：${safeUrl(source.url || article.sourceUrl || '')}`,
     `- 生成方式：${text(modeLabel)}`, `- 生成时间：${text(result.generatedAt)}`,
     '- 内容完整性：未知（基于当前可读片段）', ''].join('\n');
-  const body = [section('核心观点', result.summary, index), section('适用条件', result.conditions, index), section('需要留意', result.cautions, index)];
+  const body = [section('核心观点', result.summary, index), section('适用条件', result.conditions, index), section('AI 的批判性提醒', result.cautions, index)];
+  body.splice(1, 0, section('作者的论证步骤', result.logic, index));
+  if (Array.isArray(result.examples) && result.examples.length) {
+    body.push(`## AI 构造的具体场景\n${result.examples.map((example) => `- 情境：${text(example.situation)}\n  - 用法：${text(example.application)}`).join('\n')}\n\n`);
+  }
+  if (Array.isArray(result.questions) && result.questions.length) {
+    body.push(`## AI 建议的继续追问\n${result.questions.map((question) => `- ${text(question)}`).join('\n')}\n\n`);
+  }
+  body.push(followUpSections(followUps, article.workId));
   if (result.mode === 'reflect') {
     if (nonEmpty(reflection)) body.push(`## 用户原始复述\n${text(reflection)}\n\n`);
     if (nonEmpty(revision)) body.push(`## 用户未重新核对的修订\n${text(revision)}\n\n`);

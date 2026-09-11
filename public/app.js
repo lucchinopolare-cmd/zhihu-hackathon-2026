@@ -3,8 +3,8 @@ import { downloadLearningCard } from './learning-card.js';
 const $ = (id) => document.getElementById(id);
 const state = {
   items: [], selectedId: null, article: null, drafts: new Map(),
-  detailController: null, generationController: null, selectionVersion: 0,
-  generationVersion: 0, loading: false, expanded: false, retry: null,
+  detailController: null, generationController: null, followUpController: null, selectionVersion: 0,
+  generationVersion: 0, followUpVersion: 0, loading: false, followUpLoading: false, expanded: false, retry: null,
 };
 const ui = {
   status: $('api-status'), picker: $('article-picker'), list: $('article-list'), search: $('article-search'),
@@ -14,11 +14,13 @@ const ui = {
   task: $('action-task'), completion: $('action-completion'), review: $('action-review'),
   error: $('error-panel'), generate: $('direct-generate'), check: $('reflect-generate'), regenerate: $('regenerate'),
   progress: $('generation-progress'), expand: $('expand-source'), note: $('session-note'),
+  runtimeBadge: $('runtime-badge'), runtimeExplanation: $('runtime-explanation'),
+  followUpQuestion: $('follow-up-question'), followUpList: $('follow-up-list'), askFollowUp: $('ask-follow-up'),
 };
 
 function draft() {
   if (!state.selectedId) return null;
-  if (!state.drafts.has(state.selectedId)) state.drafts.set(state.selectedId, { mode: 'direct', reflection: '', direct: null, reflect: null });
+  if (!state.drafts.has(state.selectedId)) state.drafts.set(state.selectedId, { mode: 'direct', reflection: '', direct: null, reflect: null, followUps: [] });
   return state.drafts.get(state.selectedId);
 }
 function entry() { const d = draft(); return d ? d[d.mode] : null; }
@@ -41,6 +43,23 @@ async function api(path, options = {}) {
   }
   if (!response.ok) throw new Error(body?.error?.message || `暂时无法完成请求（${response.status}），请稍后重试。`);
   return body;
+}
+
+async function loadRuntimeState() {
+  try {
+    const health = await api('/api/health');
+    const demo = health.generationMode === 'demo';
+    ui.runtimeBadge.hidden = !demo;
+    if (demo) {
+      ui.runtimeExplanation.replaceChildren(
+        document.createTextNode('当前是本地模拟演示，不调用赛事模型'),
+        document.createElement('br'),
+        document.createTextNode('页面结构与真实生成流程一致'),
+      );
+    }
+  } catch {
+    // Content loading owns the visible connection error state.
+  }
 }
 
 function element(tag, text, className) {
@@ -111,6 +130,13 @@ function cancelGeneration(notify = false) {
   }
 }
 
+function cancelFollowUp() {
+  state.followUpVersion += 1;
+  state.followUpController?.abort();
+  state.followUpController = null;
+  state.followUpLoading = false;
+}
+
 async function selectArticle(workId) {
   const previous = state.selectedId;
   const version = ++state.selectionVersion;
@@ -118,6 +144,7 @@ async function selectArticle(workId) {
   const controller = new AbortController();
   state.detailController = controller;
   cancelGeneration();
+  cancelFollowUp();
   state.selectedId = workId;
   state.article = null;
   state.expanded = false;
@@ -184,6 +211,7 @@ function highlightCitation(citationId) {
 function switchMode(mode) {
   if (!draft()) return;
   cancelGeneration();
+  cancelFollowUp();
   draft().mode = mode;
   clearError();
   renderMode();
@@ -207,12 +235,14 @@ function renderMode() {
 }
 
 function updateControls() {
-  const disabled = state.loading || !state.article?.paragraphs?.length;
+  const disabled = state.loading || state.followUpLoading || !state.article?.paragraphs?.length;
   ui.generate.disabled = ui.check.disabled = ui.regenerate.disabled = disabled;
   ui.generate.textContent = state.loading ? '正在阅读…' : 'AI 帮我读懂';
   ui.check.textContent = state.loading ? '正在核对…' : '帮我核对';
   ui.progress.hidden = !state.loading;
   ui.progress.setAttribute('aria-busy', String(state.loading));
+  ui.askFollowUp.disabled = state.loading || state.followUpLoading || !entry();
+  ui.askFollowUp.textContent = state.followUpLoading ? '正在回答…' : '继续问';
   const current = entry();
   $('reflection-changed').hidden = !current || draft()?.mode !== 'reflect' || draft().reflection.trim() === current.reflection;
 }
@@ -241,11 +271,60 @@ function renderStatements(title, statements, feedback = false) {
   ui.resultBody.append(section);
 }
 
+function renderExamples(examples) {
+  if (!examples?.length) return;
+  const section = element('section', undefined, 'result-section example-section');
+  section.append(element('h4', 'AI 构造的具体场景'));
+  for (const example of examples) {
+    const card = element('div', undefined, 'example-card');
+    card.append(element('strong', example.situation));
+    card.append(element('p', example.application));
+    section.append(card);
+  }
+  ui.resultBody.append(section);
+}
+
+function renderFollowUps(result) {
+  $('question-prompts').replaceChildren();
+  for (const question of result.questions || []) {
+    const button = element('button', question, 'question-chip');
+    button.type = 'button';
+    button.addEventListener('click', () => { ui.followUpQuestion.value = question; ui.followUpQuestion.focus(); });
+    $('question-prompts').append(button);
+  }
+  ui.followUpList.replaceChildren();
+  for (const turn of draft()?.followUps || []) {
+    const article = element('article', undefined, 'follow-up-turn');
+    article.append(element('strong', turn.question));
+    for (const statement of turn.statements || []) {
+      const paragraph = element('p', statement.text);
+      for (const citationId of statement.citationIds || []) {
+        const citation = turn.citations.find((item) => item.id === citationId);
+        if (!citation) continue;
+        const button = element('button', '查看原文依据', 'citation');
+        button.type = 'button';
+        button.setAttribute('aria-label', `查看这条回答的原文依据：${citation.quote}`);
+        button.addEventListener('click', () => {
+          state.expanded = true;
+          renderSource(citation);
+          const sourceParagraph = Array.from(ui.content.children).find((p) => p.dataset.paragraphId === citation.paragraphId);
+          sourceParagraph?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'center' });
+          ui.note.textContent = `已定位追问依据：${citation.quote}`;
+        });
+        paragraph.append(button);
+      }
+      article.append(paragraph);
+    }
+    ui.followUpList.append(article);
+  }
+}
+
 function renderResult(current) {
   const result = current.data;
   const reflect = result.mode === 'reflect';
-  $('result-eyebrow').textContent = reflect ? 'AI 核对 · 对照当前原文' : 'AI 讲解 · 对照当前原文';
-  $('result-title').textContent = reflect ? '把你的理解与原文对照' : '先抓住这段内容的重点';
+  const demo = result.generationMode === 'demo';
+  $('result-eyebrow').textContent = `${reflect ? 'AI 核对 · 对照当前原文' : 'AI 讲解 · 对照当前原文'}${demo ? ' · 本地模拟' : ''}`;
+  $('result-title').textContent = reflect ? '把你的理解与原文对照' : '先抓住这段内容的结构';
   ui.regenerate.hidden = reflect;
   ui.resultBody.replaceChildren();
   if (reflect) {
@@ -254,19 +333,65 @@ function renderResult(current) {
     ui.resultBody.append(original);
   }
   renderStatements('核心观点', result.summary);
+  renderStatements('作者的论证步骤', result.logic);
   renderStatements('适用条件', result.conditions);
-  renderStatements('需要留意', result.cautions);
+  renderStatements('AI 的批判性提醒', result.cautions);
   renderStatements('给你的反馈', result.feedback, true);
+  renderExamples(result.examples);
+  renderFollowUps(result);
   $('revision-panel').hidden = !reflect;
   ui.revision.value = current.revision;
   ui.task.value = current.task;
   ui.completion.value = current.completion;
   ui.review.value = current.review;
-  $('generation-note').textContent = 'AI 生成，可直接导出，也可修改后再带走。';
+  $('generation-note').textContent = demo
+    ? '本地模拟演示 · 结构与真实模型协议一致，不代表赛事模型已接通。'
+    : 'AI 生成，可直接导出，也可修改后再带走。';
+}
+
+async function askFollowUp() {
+  const question = ui.followUpQuestion.value.trim();
+  if (!state.article || !entry() || state.loading || state.followUpLoading) return;
+  if (!question) {
+    showError('先写下你的问题', '可以点一个推荐问题，也可以输入自己没想明白的地方。');
+    ui.followUpQuestion.focus();
+    return;
+  }
+  clearError();
+  const workId = state.article.workId;
+  const activeDraft = draft();
+  const version = ++state.followUpVersion;
+  const controller = new AbortController();
+  state.followUpController = controller;
+  state.followUpLoading = true;
+  updateControls();
+  setStatus('正在回答追问');
+  try {
+    const data = await api('/api/follow-up', {
+      method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workId, question }),
+    });
+    if (version !== state.followUpVersion || workId !== state.selectedId) return;
+    if (data.workId !== workId) throw new Error('返回结果与当前内容不一致，请重新追问。');
+    activeDraft.followUps.push(data);
+    ui.followUpQuestion.value = '';
+    renderFollowUps(entry().data);
+    setStatus('追问已回答', 'ready');
+  } catch (error) {
+    if (version !== state.followUpVersion || error.name === 'AbortError') return;
+    showError('这次追问没有完成', error.message, askFollowUp);
+    setStatus('追问未完成', 'error');
+  } finally {
+    if (version === state.followUpVersion) {
+      state.followUpLoading = false;
+      state.followUpController = null;
+      updateControls();
+    }
+  }
 }
 
 async function generate() {
-  if (!state.article || state.loading || !state.article.paragraphs?.length) return;
+  if (!state.article || state.loading || state.followUpLoading || !state.article.paragraphs?.length) return;
   const d = draft();
   const workId = state.article.workId;
   const mode = d.mode;
@@ -323,7 +448,7 @@ $('export-card').addEventListener('click', () => {
     return;
   }
   try {
-    downloadLearningCard({ article: state.article, result: current.data, ...current });
+    downloadLearningCard({ article: state.article, result: current.data, followUps: draft().followUps, ...current });
     ui.note.textContent = '学习卡已导出。行动仍标为待尝试，可以按自己的情况修改。';
     clearError();
   } catch (error) { showError('学习卡暂时无法导出', error.message); }
@@ -338,5 +463,7 @@ ui.picker.addEventListener('click', (event) => {
 });
 ui.search.addEventListener('input', renderPicker);
 $('retry').addEventListener('click', () => { const retry = state.retry; if (retry) retry(); });
+ui.askFollowUp.addEventListener('click', askFollowUp);
 renderMode();
+loadRuntimeState();
 loadList();

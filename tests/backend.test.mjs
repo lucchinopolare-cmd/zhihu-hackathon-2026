@@ -32,7 +32,7 @@ test('health, knowledge and detail honor public contract', async () => {
   const app = createApp({ contentStore: makeStore(), modelClient });
   await withServer(app, async (base) => {
     const health = await fetch(`${base}/api/health`);
-    assert.deepEqual(await health.json(), { ok: true, modelConfigured: false, contentMode: 'sample' });
+    assert.deepEqual(await health.json(), { ok: true, modelConfigured: false, generationMode: 'live', contentMode: 'sample' });
     const list = await fetch(`${base}/api/knowledge`);
     assert.deepEqual(await list.json(), { items: [{ work_id: '1', title: '测试文章', description: '摘要' }], contentMode: 'sample' });
     const detail = await fetch(`${base}/api/knowledge/1`);
@@ -62,6 +62,46 @@ test('learn validates JSON, same origin, and reports missing model without expos
     const payload = await body.json();
     assert.equal(payload.error.code, 'MODEL_NOT_CONFIGURED');
     assert.equal(JSON.stringify(payload).includes('Bearer'), false);
+  });
+});
+
+test('follow-up validates requests and returns a cited answer', async () => {
+  const modelClient = {
+    configured: true,
+    runtimeMode: 'demo',
+    generate: async () => { throw new Error('unused'); },
+    followUp: async ({ question }) => ({
+      statements: [{ text: `针对“${question}”的回答。`, citationIds: ['f1'] }],
+      citations: [{ id: 'f1', paragraphId: 'p1', quote: '第一段。' }],
+    }),
+  };
+  const app = createApp({ contentStore: makeStore(), modelClient });
+  await withServer(app, async (base) => {
+    const response = await fetch(`${base}/api/follow-up`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workId: '1', question: '这是什么意思？' }),
+    });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.workId, '1');
+    assert.equal(result.question, '这是什么意思？');
+    assert.equal(result.generationMode, 'demo');
+    assert.equal(result.statements[0].citationIds[0], 'f1');
+    assert.equal(result.citations[0].quote, '第一段。');
+
+    const empty = await fetch(`${base}/api/follow-up`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workId: '1', question: ' ' }),
+    });
+    assert.equal(empty.status, 400);
+    assert.equal((await empty.json()).error.code, 'QUESTION_REQUIRED');
+
+    const extra = await fetch(`${base}/api/follow-up`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workId: '1', question: '问题', history: [] }),
+    });
+    assert.equal(extra.status, 400);
+    assert.equal((await extra.json()).error.code, 'INVALID_REQUEST');
   });
 });
 

@@ -58,6 +58,7 @@ export class LearningService {
       const result = {
         workId: article.workId,
         mode,
+        generationMode: this.#modelClient.runtimeMode === 'demo' ? 'demo' : 'live',
         generatedAt: new Date().toISOString(),
         source: {
           workId: article.workId,
@@ -67,8 +68,11 @@ export class LearningService {
           completeness: 'unknown',
         },
         summary: generated.summary,
+        logic: generated.logic,
         conditions: generated.conditions,
         cautions: generated.cautions,
+        examples: generated.examples,
+        questions: generated.questions,
         feedback: mode === 'direct' ? [] : generated.feedback,
         citations: generated.citations,
         action: generated.action,
@@ -81,6 +85,43 @@ export class LearningService {
       if (error instanceof LearningServiceError || error instanceof ModelClientError) throw error;
       const status = error?.status || (error?.code === 'MODEL_NOT_CONFIGURED' ? 503 : 502);
       throw new LearningServiceError('生成学习结果失败，请稍后手动重试。', { code: error?.code || 'LEARNING_ERROR', status, cause: error });
+    } finally {
+      this.#active -= 1;
+    }
+  }
+
+  async followUp({ workId, question, signal } = {}) {
+    const normalizedQuestion = typeof question === 'string' ? question.trim() : '';
+    if (!normalizedQuestion) {
+      throw new LearningServiceError('追问内容不能为空。', { code: 'QUESTION_REQUIRED', status: 400 });
+    }
+    if (normalizedQuestion.length > 1000) {
+      throw new LearningServiceError('追问内容过长，请缩短到 1000 字以内。', { code: 'QUESTION_TOO_LONG', status: 400 });
+    }
+    if (!this.#modelClient.configured) throw new ModelNotConfiguredError();
+    if (typeof this.#modelClient.followUp !== 'function') {
+      throw new LearningServiceError('当前模型不支持继续追问。', { code: 'FOLLOW_UP_UNAVAILABLE', status: 503 });
+    }
+    if (this.#active >= this.#maxConcurrent) throw new GenerationBusyError();
+    this.#active += 1;
+    try {
+      if (signal?.aborted) throw new LearningServiceError('追问请求已取消。', { code: 'GENERATION_CANCELLED', status: 499 });
+      const article = await this.#contentStore.detail(workId);
+      if (signal?.aborted) throw new LearningServiceError('追问请求已取消。', { code: 'GENERATION_CANCELLED', status: 499 });
+      const generated = await this.#modelClient.followUp({ article, question: normalizedQuestion, signal });
+      return Object.freeze({
+        workId: article.workId,
+        question: normalizedQuestion,
+        statements: generated.statements,
+        citations: generated.citations,
+        generationMode: this.#modelClient.runtimeMode === 'demo' ? 'demo' : 'live',
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      if (error instanceof LearningServiceError || error instanceof ModelClientError) throw error;
+      throw new LearningServiceError('追问没有完成，请稍后手动重试。', {
+        code: error?.code || 'FOLLOW_UP_ERROR', status: error?.status || 502, cause: error,
+      });
     } finally {
       this.#active -= 1;
     }

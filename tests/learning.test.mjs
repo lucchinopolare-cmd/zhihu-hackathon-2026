@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ResponsesModelClient, ModelNotConfiguredError, ModelTimeoutError, ModelCancelledError, validateGeneratedLearning } from '../src/model-client.mjs';
+import { ResponsesModelClient, ModelNotConfiguredError, ModelTimeoutError, ModelCancelledError, validateFollowUp, validateGeneratedLearning } from '../src/model-client.mjs';
 import { LearningService } from '../src/learning-service.mjs';
 
 const paragraphs = [{ id: 'p1', text: '闭合一个小任务可以带来完结感。' }, { id: 'p2', text: '行动建议应当由用户自行调整。' }];
@@ -9,8 +9,14 @@ const article = { workId: '1', title: '标题', author: '作者', paragraphs, co
 function generated({ feedback = [], quote = paragraphs[0].text } = {}) {
   return {
     summary: [{ text: '先完成一个小任务。', citationIds: ['c1'] }],
+    logic: [
+      { text: '小任务的结束会带来可感知的完结感。', citationIds: ['c1'] },
+      { text: '这种完结感可以成为继续行动的起点。', citationIds: ['c1'] },
+    ],
     conditions: [{ text: '适合需要明确边界时。', citationIds: ['c1'] }],
-    cautions: [],
+    cautions: [{ text: '这只是当前片段支持的解释，仍需结合个人情况判断。', citationIds: [] }],
+    examples: [{ situation: '面对一个迟迟没开始的任务。', application: '先把它拆成十分钟内能结束的一步。' }],
+    questions: ['这条建议在什么情况下可能不适用？', '我怎样判断这一步已经完成？'],
     feedback,
     citations: [{ id: 'c1', paragraphId: 'p1', quote }],
     action: { task: '选一个小任务并完成它', completion: '记录完成结果', review: '回顾下一步' },
@@ -44,6 +50,44 @@ test('conditions and reflection feedback require verifiable citations', () => {
     () => validateGeneratedLearning(feedbackWithoutCitation, { paragraphs, mode: 'reflect' }),
     /feedback\[0\].*缺少原文依据/,
   );
+});
+
+test('follow-up validation requires a verbatim citation from the current article', () => {
+  const value = validateFollowUp({
+    statements: [{ text: '原文把小任务的完结感当作行动起点。', citationIds: ['f1'] }],
+    citations: [{ id: 'f1', paragraphId: 'p1', quote: '闭合一个小任务可以带来完结感' }],
+  }, { paragraphs });
+  assert.equal(value.statements[0].text, '原文把小任务的完结感当作行动起点。');
+  assert.throws(() => validateFollowUp({
+    statements: [{ text: '没有依据的回答。', citationIds: ['f1'] }],
+    citations: [{ id: 'f1', paragraphId: 'p1', quote: '原文不存在的句子' }],
+  }, { paragraphs }), /逐字找到/);
+  assert.throws(() => validateFollowUp({
+    statements: [{ text: '没有绑定依据的回答。', citationIds: [] }],
+    citations: [{ id: 'f1', paragraphId: 'p1', quote: paragraphs[0].text }],
+  }, { paragraphs }), /缺少原文依据/);
+  assert.throws(() => validateFollowUp({
+    statements: [{ text: '引用编号不存在。', citationIds: ['missing'] }],
+    citations: [{ id: 'f1', paragraphId: 'p1', quote: paragraphs[0].text }],
+  }, { paragraphs }), /不存在/);
+});
+
+test('learning service trims follow-up questions and preserves demo attribution', async () => {
+  const contentStore = { detail: async () => article };
+  const modelClient = {
+    configured: true,
+    runtimeMode: 'demo',
+    generate: async () => generated(),
+    followUp: async ({ question }) => ({
+      statements: [{ text: `回答：${question}`, citationIds: ['f1'] }],
+      citations: [{ id: 'f1', paragraphId: 'p1', quote: paragraphs[0].text }],
+    }),
+  };
+  const service = new LearningService({ contentStore, modelClient });
+  await assert.rejects(service.followUp({ workId: '1', question: '   ' }), { code: 'QUESTION_REQUIRED' });
+  const result = await service.followUp({ workId: '1', question: '  为什么？  ' });
+  assert.equal(result.question, '为什么？');
+  assert.equal(result.generationMode, 'demo');
 });
 
 test('learning service requires reflection and preserves generated mode', async () => {
