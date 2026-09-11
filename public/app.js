@@ -469,7 +469,7 @@ $('export-card').addEventListener('click', () => {
   }
   try {
     downloadLearningCard({ article: state.article, result: current.data, followUps: draft().followUps, ...current });
-    ui.note.textContent = '学习卡已导出。行动仍标为待尝试，可以按自己的情况修改。';
+    ui.note.textContent = 'Word 学习卡已导出。行动仍标为待尝试，可以按自己的情况修改。';
     clearError();
   } catch (error) { showError('学习卡暂时无法导出', error.message); }
 });

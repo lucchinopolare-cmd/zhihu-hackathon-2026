@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildLearningCard, downloadLearningCard } from '../public/learning-card.js';
+import { buildLearningCard, buildLearningCardDocx, downloadLearningCard } from '../public/learning-card.js';
 
 const article = { workId: 'w-1', title: '标题 / <危险>', author: '作者', sourceUrl: 'https://example.com/a' };
 const result = {
@@ -72,5 +72,26 @@ test('bad source URL is plain text and filename is Windows safe', () => {
   const bad = buildLearningCard({ article: { ...article, sourceUrl: 'javascript:alert(1)' }, result: { ...result, source: { ...result.source, url: 'javascript:alert(1)' } } });
   assert.match(bad, /javascript/);
   assert.doesNotMatch(bad, /<javascript:/i);
-  assert.match(downloadLearningCard({ article, result }), /^知行小课-标题 危险\.md$/);
+  assert.match(downloadLearningCard({ article, result }), /^知行小课-标题 危险\.docx$/);
+});
+
+test('Word export is a styled Office document with the same source attribution', () => {
+  const docx = buildLearningCardDocx({ article, result });
+  assert.ok(docx instanceof Uint8Array);
+  assert.deepEqual([...docx.slice(0, 4)], [0x50, 0x4b, 0x03, 0x04]);
+  const xmlText = new TextDecoder().decode(docx);
+  assert.match(xmlText, /word\/document\.xml/);
+  assert.match(xmlText, /word\/styles\.xml/);
+  assert.match(xmlText, /AI 直接讲解/);
+  assert.match(xmlText, /作者的论证步骤/);
+  assert.match(xmlText, /application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document/);
+});
+
+test('Word export preserves demo attribution and reflection feedback labels', () => {
+  const reflected = { ...result, mode: 'reflect', generationMode: 'demo',
+    source: { ...result.source, contentMode: 'demo' },
+    feedback: [{ kind: 'missing', text: '还可以补充适用条件。', citationIds: ['c1'] }] };
+  const output = new TextDecoder().decode(buildLearningCardDocx({ article, result: reflected, reflection: '我的理解' }));
+  assert.match(output, /开发演示预设回答（不代表赛事模型已接通）/);
+  assert.match(output, /【可以补充】还可以补充适用条件。/);
 });
