@@ -133,6 +133,7 @@ export class LearningService {
     const normalizedQuestion = typeof question === 'string' ? question.trim() : '';
     const normalizedAnswer = typeof answer === 'string' ? answer.trim() : '';
     if (!normalizedQuestion) throw new LearningServiceError('挑战问题不能为空。', { code: 'CHALLENGE_REQUIRED', status: 400 });
+    if (normalizedQuestion.length > 500) throw new LearningServiceError('挑战问题过长，请缩短到 500 字以内。', { code: 'CHALLENGE_TOO_LONG', status: 400 });
     if (!normalizedAnswer) throw new LearningServiceError('请先写下你的挑战回答。', { code: 'CHALLENGE_ANSWER_REQUIRED', status: 400 });
     if (normalizedAnswer.length > 2000) throw new LearningServiceError('挑战回答过长，请缩短到 2000 字以内。', { code: 'CHALLENGE_ANSWER_TOO_LONG', status: 400 });
     if (!this.#modelClient.configured) throw new ModelNotConfiguredError();

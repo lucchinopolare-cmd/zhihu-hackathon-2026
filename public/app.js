@@ -37,7 +37,7 @@ function showError(title, message, retry = null) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, options);
+  const response = await fetch(path, { credentials: 'same-origin', ...options });
   let body;
   try { body = await response.json(); } catch (error) {
     if (error.name === 'AbortError') throw error;

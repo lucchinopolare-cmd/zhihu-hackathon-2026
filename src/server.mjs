@@ -48,7 +48,10 @@ export function createApp({
   requireOrigin = envBoolean('REQUIRE_ORIGIN', true),
   allowedOrigin = process.env.ALLOWED_ORIGIN || '',
   generationAuthToken = process.env.GENERATION_AUTH_TOKEN || '',
-  requireGenerationAuth = envBoolean('REQUIRE_GENERATION_AUTH', Boolean(generationAuthToken)),
+  generationSessionCookieName = process.env.GENERATION_SESSION_COOKIE_NAME || 'generation_session',
+  generationSessionCookieValue = process.env.GENERATION_SESSION_COOKIE_VALUE || '',
+  generationGatewayToken = process.env.GENERATION_GATEWAY_TOKEN || '',
+  requireGenerationAuth = envBoolean('REQUIRE_GENERATION_AUTH', Boolean(generationAuthToken || generationSessionCookieValue || generationGatewayToken)),
   generationGuard = null,
   now = () => Date.now(),
 } = {}) {
@@ -74,7 +77,8 @@ export function createApp({
     try {
       await route(req, res, {
         store, model, service, safePublicDir, maxRequestBytes, bodyTimeoutMs, generationGuard: requestGuard,
-        requireOrigin, allowedOrigin, generationAuthToken, requireGenerationAuth,
+        requireOrigin, allowedOrigin, generationAuthToken, generationSessionCookieName,
+        generationSessionCookieValue, generationGatewayToken, requireGenerationAuth,
       });
     } catch (error) {
       if (res.headersSent) {
@@ -153,7 +157,6 @@ async function route(req, res, ctx) {
     if (payload.mode === 'reflect' && (typeof payload.reflection !== 'string' || payload.reflection.trim() === '')) {
       throw new LearningServiceError('reflect 模式需要填写非空复述。', { code: 'REFLECTION_REQUIRED', status: 400 });
     }
-    assertModelConfigured(ctx);
     const reservation = ctx.generationGuard.reserve(req);
     let committed = false;
     const requestAbort = new AbortController();
@@ -164,6 +167,7 @@ async function route(req, res, ctx) {
     res.on('close', onClose);
     let result;
     try {
+      assertModelConfigured(ctx);
       result = await ctx.service.learn({
         workId: payload.workId,
         mode: payload.mode,
@@ -200,7 +204,6 @@ async function route(req, res, ctx) {
     if (payload.question.trim().length > 1000) {
       throw new LearningServiceError('追问内容过长，请缩短到 1000 字以内。', { code: 'QUESTION_TOO_LONG', status: 400 });
     }
-    assertModelConfigured(ctx);
     const reservation = ctx.generationGuard.reserve(req);
     let committed = false;
     const requestAbort = new AbortController();
@@ -210,6 +213,7 @@ async function route(req, res, ctx) {
     req.on('aborted', onClose);
     res.on('close', onClose);
     try {
+      assertModelConfigured(ctx);
       const result = await ctx.service.followUp({
         workId: payload.workId,
         question: payload.question,
@@ -244,6 +248,9 @@ async function route(req, res, ctx) {
       if (typeof payload.question !== 'string' || payload.question.trim() === '') {
         throw new LearningServiceError('挑战问题不能为空。', { code: 'CHALLENGE_REQUIRED', status: 400 });
       }
+      if (payload.question.trim().length > 500) {
+        throw new LearningServiceError('挑战问题过长，请缩短到 500 字以内。', { code: 'CHALLENGE_TOO_LONG', status: 400 });
+      }
       if (typeof payload.answer !== 'string' || payload.answer.trim() === '') {
         throw new LearningServiceError('请先写下你的挑战回答。', { code: 'CHALLENGE_ANSWER_REQUIRED', status: 400 });
       }
@@ -258,13 +265,13 @@ async function route(req, res, ctx) {
         throw new LearningServiceError('使用场景过长，请缩短到 1000 字以内。', { code: 'SCENARIO_TOO_LONG', status: 400 });
       }
     }
-    assertModelConfigured(ctx);
     const reservation = ctx.generationGuard.reserve(req);
     let committed = false;
     const requestAbort = new AbortController();
     const onClose = () => { if (!res.writableEnded) requestAbort.abort(new Error('client disconnected')); };
     req.on('aborted', onClose); res.on('close', onClose);
     try {
+      assertModelConfigured(ctx);
       const result = isChallenge
         ? await ctx.service.checkChallenge({ workId: payload.workId, question: payload.question, answer: payload.answer, signal: requestAbort.signal })
         : await ctx.service.personalizeAction({ workId: payload.workId, scenario: payload.scenario, signal: requestAbort.signal });
@@ -324,12 +331,31 @@ function assertGenerationAccess(req, ctx) {
   assertSameOrigin(req, ctx);
   if (!ctx.requireGenerationAuth) return;
   const authorization = String(req.headers?.authorization || '');
-  const expected = `Bearer ${ctx.generationAuthToken}`;
-  const actualBytes = Buffer.from(authorization);
-  const expectedBytes = Buffer.from(expected);
-  if (!ctx.generationAuthToken || actualBytes.length !== expectedBytes.length || !timingSafeEqual(actualBytes, expectedBytes)) {
+  const bearerValid = ctx.generationAuthToken && safeEqual(authorization, `Bearer ${ctx.generationAuthToken}`);
+  const sessionValue = readCookie(req, ctx.generationSessionCookieName);
+  const sessionValid = ctx.generationSessionCookieValue && safeEqual(sessionValue, ctx.generationSessionCookieValue);
+  const gatewayHeader = String(req.headers?.['x-generation-gateway-token'] || '');
+  const gatewayValid = ctx.generationGatewayToken && safeEqual(gatewayHeader, ctx.generationGatewayToken);
+  if (!bearerValid && !sessionValid && !gatewayValid) {
     throw new HttpError(401, 'GENERATION_AUTH_REQUIRED', '生成请求需要有效的访问凭证。');
   }
+}
+
+function safeEqual(actual, expected) {
+  const actualBytes = Buffer.from(String(actual));
+  const expectedBytes = Buffer.from(String(expected));
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+}
+
+function readCookie(req, name) {
+  if (!name) return '';
+  const header = String(req.headers?.cookie || '');
+  for (const part of header.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator < 0) continue;
+    if (part.slice(0, separator).trim() === name) return part.slice(separator + 1).trim();
+  }
+  return '';
 }
 
 function assertModelConfigured(ctx) {
@@ -386,8 +412,6 @@ class GenerationGuard {
         if (settled) return;
         settled = true;
         this.#reserved -= 1;
-        state.count = Math.max(0, state.count - 1);
-        if (state.count === 0) this.#clients.delete(key);
       },
     };
   }

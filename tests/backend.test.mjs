@@ -104,6 +104,73 @@ test('generation endpoints enforce per-origin frequency and cumulative request l
   });
 });
 
+test('failed generation still consumes the per-window attempt limit', async () => {
+  let calls = 0;
+  const service = {
+    modelConfigured: true,
+    learn: async () => {
+      calls += 1;
+      throw Object.assign(new Error('upstream failed'), { status: 502, code: 'MODEL_UPSTREAM_ERROR' });
+    },
+  };
+  const app = createApp({
+    contentStore: makeStore(),
+    modelClient: { configured: true, runtimeMode: 'live' },
+    learningService: service,
+    generationWindowMs: 1000,
+    maxGenerationPerWindow: 1,
+    maxGenerationRequests: 10,
+  });
+  await withServer(app, async (base) => {
+    const options = { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ workId: '1', mode: 'direct' }) };
+    const failed = await fetch(`${base}/api/learn`, options);
+    assert.equal(failed.status, 502);
+    const tooFast = await fetch(`${base}/api/learn`, options);
+    assert.equal(tooFast.status, 429);
+    assert.equal((await tooFast.json()).error.code, 'GENERATION_RATE_LIMITED');
+    assert.equal(calls, 1);
+  });
+});
+
+test('a released old-window request cannot delete the current rate-limit state', async () => {
+  let now = 0;
+  let calls = 0;
+  let releaseFirst;
+  const service = {
+    modelConfigured: true,
+    learn: async () => {
+      calls += 1;
+      if (calls === 1) {
+        await new Promise((resolve) => { releaseFirst = resolve; });
+      }
+      throw Object.assign(new Error('upstream failed'), { status: 502, code: 'MODEL_UPSTREAM_ERROR' });
+    },
+  };
+  const app = createApp({
+    contentStore: makeStore(),
+    modelClient: { configured: true, runtimeMode: 'live' },
+    learningService: service,
+    generationWindowMs: 1000,
+    maxGenerationPerWindow: 1,
+    maxGenerationRequests: 10,
+    now: () => now,
+  });
+  await withServer(app, async (base) => {
+    const options = { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ workId: '1', mode: 'direct' }) };
+    const first = fetch(`${base}/api/learn`, options);
+    await waitFor(() => calls === 1);
+    now = 1001;
+    const second = fetch(`${base}/api/learn`, options);
+    await waitFor(() => calls === 2);
+    releaseFirst();
+    assert.equal((await first).status, 502);
+    assert.equal((await second).status, 502);
+    const third = await fetch(`${base}/api/learn`, options);
+    assert.equal(third.status, 429);
+    assert.equal((await third.json()).error.code, 'GENERATION_RATE_LIMITED');
+  });
+});
+
 test('failed generation releases its reserved cumulative budget', async () => {
   let calls = 0;
   const service = {
@@ -129,6 +196,31 @@ test('failed generation releases its reserved cumulative budget', async () => {
   });
 });
 
+test('an unconfigured model attempt is rate-limited but does not consume cumulative success budget', async () => {
+  let now = 0;
+  const app = createApp({
+    contentStore: makeStore(),
+    modelClient: { configured: false, generate: async () => {}, runtimeMode: 'live' },
+    generationWindowMs: 1000,
+    maxGenerationPerWindow: 1,
+    maxGenerationRequests: 1,
+    now: () => now,
+  });
+  await withServer(app, async (base) => {
+    const options = { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ workId: '1', mode: 'direct' }) };
+    const missing = await fetch(`${base}/api/learn`, options);
+    assert.equal(missing.status, 503);
+    assert.equal((await missing.json()).error.code, 'MODEL_NOT_CONFIGURED');
+    const tooFast = await fetch(`${base}/api/learn`, options);
+    assert.equal(tooFast.status, 429);
+    assert.equal((await tooFast.json()).error.code, 'GENERATION_RATE_LIMITED');
+    now = 1001;
+    const stillMissing = await fetch(`${base}/api/learn`, options);
+    assert.equal(stillMissing.status, 503);
+    assert.equal((await stillMissing.json()).error.code, 'MODEL_NOT_CONFIGURED');
+  });
+});
+
 test('generation endpoints can require a bearer authorization token', async () => {
   const app = createApp({
     contentStore: makeStore(),
@@ -136,6 +228,43 @@ test('generation endpoints can require a bearer authorization token', async () =
     learningService: { modelConfigured: true, learn: async ({ workId, mode }) => ({ workId, mode }) },
     generationAuthToken: 'test-token',
     requireGenerationAuth: true,
+  });
+  await withServer(app, async (base) => {
+    const payload = JSON.stringify({ workId: '1', mode: 'direct' });
+    const missing = await fetch(`${base}/api/learn`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: payload });
+    assert.equal(missing.status, 401);
+    const allowed = await fetch(`${base}/api/learn`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base, authorization: 'Bearer test-token' }, body: payload });
+    assert.equal(allowed.status, 200);
+  });
+});
+
+test('browser generation requests can use a server-managed session cookie or trusted gateway token', async () => {
+  const app = createApp({
+    contentStore: makeStore(),
+    modelClient: { configured: true, runtimeMode: 'demo' },
+    learningService: { modelConfigured: true, learn: async ({ workId, mode }) => ({ workId, mode }) },
+    generationSessionCookieName: 'learning_session',
+    generationSessionCookieValue: 'opaque-session',
+    generationGatewayToken: 'gateway-secret',
+    requireGenerationAuth: true,
+  });
+  await withServer(app, async (base) => {
+    const payload = JSON.stringify({ workId: '1', mode: 'direct' });
+    const cookie = await fetch(`${base}/api/learn`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base, cookie: 'learning_session=opaque-session' }, body: payload });
+    assert.equal(cookie.status, 200);
+    const gateway = await fetch(`${base}/api/learn`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base, 'x-generation-gateway-token': 'gateway-secret' }, body: payload });
+    assert.equal(gateway.status, 200);
+    const missing = await fetch(`${base}/api/learn`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: payload });
+    assert.equal(missing.status, 401);
+  });
+});
+
+test('setting a generation bearer token enables authorization by default', async () => {
+  const app = createApp({
+    contentStore: makeStore(),
+    modelClient: { configured: true, runtimeMode: 'demo' },
+    learningService: { modelConfigured: true, learn: async ({ workId, mode }) => ({ workId, mode }) },
+    generationAuthToken: 'test-token',
   });
   await withServer(app, async (base) => {
     const payload = JSON.stringify({ workId: '1', mode: 'direct' });
@@ -208,8 +337,19 @@ test('challenge and scenario action endpoints keep inputs scoped to the selected
     const empty = await fetch(`${base}/api/challenge`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ workId: '1', question: '问题', answer: ' ' }) });
     assert.equal(empty.status, 400);
     assert.equal((await empty.json()).error.code, 'CHALLENGE_ANSWER_REQUIRED');
+    const tooLongQuestion = await fetch(`${base}/api/challenge`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ workId: '1', question: '问'.repeat(501), answer: '回答' }) });
+    assert.equal(tooLongQuestion.status, 400);
+    assert.equal((await tooLongQuestion.json()).error.code, 'CHALLENGE_TOO_LONG');
   });
 });
+
+async function waitFor(predicate, timeoutMs = 1000) {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) throw new Error('timed out waiting for test condition');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
 
 test('static allowlist prevents traversal and does not expose source files', async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'zhihu-public-'));
