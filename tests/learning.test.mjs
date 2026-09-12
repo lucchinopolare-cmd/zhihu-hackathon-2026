@@ -137,3 +137,11 @@ test('challenge validation requires cited feedback and only adds a variant when 
   assert.throws(() => validateChallengeCheck({ ...ready, status: 'ready', variantQuestion: '再答一次' }, { paragraphs }), /不应追加/);
   assert.throws(() => validateChallengeCheck({ ...ready, status: 'revisit', variantQuestion: '' }, { paragraphs }), /必须提供/);
 });
+
+test('learning challenge questions have a bounded length', () => {
+  const longQuestion = {
+    ...generated(),
+    challenge: { question: '问'.repeat(501), citationIds: ['c1'] },
+  };
+  assert.throws(() => validateGeneratedLearning(longQuestion, { paragraphs, mode: 'direct' }), /challenge\.question.*过长/);
+});

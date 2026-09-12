@@ -22,7 +22,7 @@ const ui = {
 
 function draft() {
   if (!state.selectedId) return null;
-  if (!state.drafts.has(state.selectedId)) state.drafts.set(state.selectedId, { mode: 'direct', reflection: '', direct: null, reflect: null, followUps: [], challengeAnswer: '', challengeResult: null, personalizedAction: null });
+  if (!state.drafts.has(state.selectedId)) state.drafts.set(state.selectedId, { mode: 'direct', reflection: '', direct: null, reflect: null, followUps: [] });
   return state.drafts.get(state.selectedId);
 }
 function entry() { const d = draft(); return d ? d[d.mode] : null; }
@@ -244,8 +244,11 @@ function switchMode(mode) {
   const previousMode = draft().mode;
   if (previousMode === mode) return;
   draft().reflection = ui.reflection.value;
-  draft().challengeAnswer = ui.challengeAnswer.value;
-  draft().scenario = ui.actionScenario.value;
+  const current = entry();
+  if (current) {
+    current.challengeAnswer = ui.challengeAnswer.value;
+    current.scenario = ui.actionScenario.value;
+  }
   cancelGeneration();
   cancelFollowUp();
   cancelFeatureRequests();
@@ -365,7 +368,6 @@ function renderFollowUps(result) {
 }
 
 function renderResult(current) {
-  const d = draft();
   const result = current.data;
   const reflect = result.mode === 'reflect';
   const demo = result.generationMode === 'demo';
@@ -375,8 +377,8 @@ function renderResult(current) {
   ui.regenerate.hidden = reflect;
   ui.resultBody.replaceChildren();
   ui.challengeQuestion.textContent = result.challenge?.question || '';
-  ui.challengeAnswer.value = d?.challengeAnswer || '';
-  renderChallengeFeedback(d?.challengeResult);
+  ui.challengeAnswer.value = current.challengeAnswer || '';
+  renderChallengeFeedback(current.challengeResult);
   if (reflect) {
     const original = element('details', undefined, 'original-reflection');
     original.append(element('summary', '本次提交的复述'), element('p', current.reflection));
@@ -394,7 +396,7 @@ function renderResult(current) {
   ui.task.value = current.task;
   ui.completion.value = current.completion;
   ui.review.value = current.review;
-  ui.actionScenario.value = d?.scenario || '';
+  ui.actionScenario.value = current.scenario || '';
   $('generation-note').textContent = demo
     ? demoContent
       ? '开发演示 · 使用项目原创材料与预设回答，不代表赛事内容或赛事模型已开放。'
@@ -476,7 +478,6 @@ async function askFollowUp() {
 
 async function checkChallenge() {
   const current = entry();
-  const activeDraft = draft();
   const answer = ui.challengeAnswer.value.trim();
   if (!state.article || !current || state.loading || state.challengeLoading) return;
   if (!answer) { showError('先写下你的回答', '用一两句话回答即可，再点击核对。'); ui.challengeAnswer.focus(); return; }
@@ -487,14 +488,14 @@ async function checkChallenge() {
   const controller = new AbortController();
   state.challengeController = controller;
   state.challengeLoading = true;
-  activeDraft.challengeAnswer = answer;
-  activeDraft.challengeResult = null;
+  current.challengeAnswer = answer;
+  current.challengeResult = null;
   ui.challengeFeedback.replaceChildren();
   updateControls();
   try {
     const data = await api('/api/challenge', { method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workId, question, answer }) });
     if (version !== state.challengeVersion || workId !== state.selectedId) return;
-    if (activeDraft.challengeAnswer.trim() !== answer) {
+    if (current.challengeAnswer.trim() !== answer) {
       setStatus('回答已更新，旧核对已忽略', 'ready');
       ui.note.textContent = '你在等待期间修改了回答，旧的核对结果没有覆盖新内容。';
       return;
@@ -502,7 +503,7 @@ async function checkChallenge() {
     if (data.workId !== workId || data.question !== question || data.answer !== answer) {
       throw new Error('返回结果与当前挑战不一致，旧核对结果已忽略。');
     }
-    activeDraft.challengeResult = data;
+    current.challengeResult = data;
     renderChallengeFeedback(data);
     setStatus('挑战已核对', 'ready');
   } catch (error) {
@@ -516,8 +517,6 @@ async function checkChallenge() {
 
 async function personalizeAction() {
   const current = entry();
-  const activeDraft = draft();
-  const activeEntry = current;
   const scenario = ui.actionScenario.value.trim();
   if (!state.article || !current || state.loading || state.personalizeLoading) return;
   if (!scenario) { showError('先写下你的场景', '例如课程、考试准备或一个具体任务。'); ui.actionScenario.focus(); return; }
@@ -533,7 +532,7 @@ async function personalizeAction() {
   try {
     const data = await api('/api/personalize-action', { method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workId, scenario }) });
     if (version !== state.personalizeVersion || workId !== state.selectedId) return;
-    if (activeDraft.scenario.trim() !== scenarioSnapshot || current.task !== actionSnapshot.task || current.completion !== actionSnapshot.completion || current.review !== actionSnapshot.review) {
+    if (current.scenario.trim() !== scenarioSnapshot || current.task !== actionSnapshot.task || current.completion !== actionSnapshot.completion || current.review !== actionSnapshot.review) {
       setStatus('行动已更新，旧调整已忽略', 'ready');
       ui.note.textContent = '你在等待期间修改了行动，旧的场景化结果没有覆盖新内容。';
       return;
@@ -541,14 +540,14 @@ async function personalizeAction() {
     if (data.workId !== workId || data.scenario !== scenario || !data.action) {
       throw new Error('返回结果与当前场景不一致，旧调整结果已忽略。');
     }
-    activeDraft.scenario = scenario;
-    activeDraft.personalizedAction = data;
-    activeEntry.task = data.action.task;
-    activeEntry.completion = data.action.completion;
-    activeEntry.review = data.action.review || '';
-    activeEntry.actionBase = { ...data.action };
-    activeEntry.actionEdited = false;
-    ui.task.value = activeEntry.task; ui.completion.value = activeEntry.completion; ui.review.value = activeEntry.review;
+    current.scenario = scenario;
+    current.personalizedAction = data;
+    current.task = data.action.task;
+    current.completion = data.action.completion;
+    current.review = data.action.review || '';
+    current.actionBase = { ...data.action };
+    current.actionEdited = false;
+    ui.task.value = current.task; ui.completion.value = current.completion; ui.review.value = current.review;
     setStatus('行动已按场景调整', 'ready');
   } catch (error) {
     if (version !== state.personalizeVersion || error.name === 'AbortError') return;
@@ -587,6 +586,7 @@ async function generate() {
     d[mode] = {
       data, reflection, revision: '', task: data.action.task, completion: data.action.completion, review: data.action.review || '',
       actionBase: { ...data.action }, actionEdited: false,
+      challengeAnswer: '', challengeResult: null, scenario: '', personalizedAction: null,
     };
     renderMode();
     setStatus('讲解已生成', 'ready');
@@ -628,15 +628,14 @@ $('export-card').addEventListener('click', () => {
     return;
   }
   try {
-    const d = draft();
     downloadLearningCard({
       article: state.article,
       result: current.data,
-      followUps: d.followUps,
-      challengeAnswer: d.challengeAnswer,
-      challengeResult: d.challengeResult,
-      scenario: d.scenario,
-      personalizedAction: d.personalizedAction,
+      followUps: draft().followUps,
+      challengeAnswer: current.challengeAnswer,
+      challengeResult: current.challengeResult,
+      scenario: current.scenario,
+      personalizedAction: current.personalizedAction,
       ...current,
     });
     ui.note.textContent = 'Word 学习卡已导出。行动仍标为待尝试，可以按自己的情况修改。';
@@ -654,9 +653,9 @@ ui.picker.addEventListener('click', (event) => {
 ui.search.addEventListener('input', renderPicker);
 $('retry').addEventListener('click', () => { const retry = state.retry; if (retry) retry(); });
 ui.askFollowUp.addEventListener('click', askFollowUp);
-ui.challengeAnswer.addEventListener('input', () => { if (draft()) draft().challengeAnswer = ui.challengeAnswer.value; });
+ui.challengeAnswer.addEventListener('input', () => { if (entry()) entry().challengeAnswer = ui.challengeAnswer.value; });
 ui.checkChallenge.addEventListener('click', checkChallenge);
-ui.actionScenario.addEventListener('input', () => { if (draft()) draft().scenario = ui.actionScenario.value; });
+ui.actionScenario.addEventListener('input', () => { if (entry()) entry().scenario = ui.actionScenario.value; });
 ui.personalizeAction.addEventListener('click', personalizeAction);
 renderMode();
 loadRuntimeState();

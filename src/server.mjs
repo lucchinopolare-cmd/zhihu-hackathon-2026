@@ -1,9 +1,10 @@
 import http from 'node:http';
+import { timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ContentStore, ContentStoreError } from './content-store.mjs';
-import { ResponsesModelClient, ModelClientError, MODEL_DEFAULTS } from './model-client.mjs';
+import { ResponsesModelClient, ModelClientError, ModelNotConfiguredError, MODEL_DEFAULTS } from './model-client.mjs';
 import { LearningService, LearningServiceError } from './learning-service.mjs';
 
 const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -46,6 +47,9 @@ export function createApp({
   maxGenerationRequests = envInteger('MAX_GENERATION_REQUESTS', DEFAULT_MAX_GENERATION_REQUESTS),
   requireOrigin = envBoolean('REQUIRE_ORIGIN', true),
   allowedOrigin = process.env.ALLOWED_ORIGIN || '',
+  generationAuthToken = process.env.GENERATION_AUTH_TOKEN || '',
+  requireGenerationAuth = envBoolean('REQUIRE_GENERATION_AUTH', Boolean(generationAuthToken)),
+  generationGuard = null,
   now = () => Date.now(),
 } = {}) {
   const store = contentStore ?? new ContentStore();
@@ -59,7 +63,7 @@ export function createApp({
   });
   const service = learningService ?? new LearningService({ contentStore: store, modelClient: model, maxConcurrent });
   const safePublicDir = path.resolve(publicDir);
-  const generationGuard = new GenerationGuard({
+  const requestGuard = generationGuard ?? new GenerationGuard({
     windowMs: generationWindowMs,
     maxPerWindow: maxGenerationPerWindow,
     maxRequests: maxGenerationRequests,
@@ -69,7 +73,8 @@ export function createApp({
   const handler = async (req, res) => {
     try {
       await route(req, res, {
-        store, model, service, safePublicDir, maxRequestBytes, bodyTimeoutMs, generationGuard, requireOrigin, allowedOrigin,
+        store, model, service, safePublicDir, maxRequestBytes, bodyTimeoutMs, generationGuard: requestGuard,
+        requireOrigin, allowedOrigin, generationAuthToken, requireGenerationAuth,
       });
     } catch (error) {
       if (res.headersSent) {
@@ -129,7 +134,7 @@ async function route(req, res, ctx) {
     return;
   }
   if (method === 'POST' && url.pathname === '/api/learn') {
-    assertSameOrigin(req, ctx);
+    assertGenerationAccess(req, ctx);
     assertJsonContentType(req);
     const payload = await readJsonBody(req, ctx.maxRequestBytes, ctx.bodyTimeoutMs);
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -148,7 +153,9 @@ async function route(req, res, ctx) {
     if (payload.mode === 'reflect' && (typeof payload.reflection !== 'string' || payload.reflection.trim() === '')) {
       throw new LearningServiceError('reflect 模式需要填写非空复述。', { code: 'REFLECTION_REQUIRED', status: 400 });
     }
-    ctx.generationGuard.consume(req);
+    assertModelConfigured(ctx);
+    const reservation = ctx.generationGuard.reserve(req);
+    let committed = false;
     const requestAbort = new AbortController();
     const onClose = () => {
       if (!res.writableEnded) requestAbort.abort(new Error('client disconnected'));
@@ -163,7 +170,10 @@ async function route(req, res, ctx) {
         reflection: payload.reflection,
         signal: requestAbort.signal,
       });
+      reservation.commit();
+      committed = true;
     } finally {
+      if (!committed) reservation.release();
       req.off('aborted', onClose);
       res.off('close', onClose);
     }
@@ -171,7 +181,7 @@ async function route(req, res, ctx) {
     return;
   }
   if (method === 'POST' && url.pathname === '/api/follow-up') {
-    assertSameOrigin(req, ctx);
+    assertGenerationAccess(req, ctx);
     assertJsonContentType(req);
     const payload = await readJsonBody(req, ctx.maxRequestBytes, ctx.bodyTimeoutMs);
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -190,7 +200,9 @@ async function route(req, res, ctx) {
     if (payload.question.trim().length > 1000) {
       throw new LearningServiceError('追问内容过长，请缩短到 1000 字以内。', { code: 'QUESTION_TOO_LONG', status: 400 });
     }
-    ctx.generationGuard.consume(req);
+    assertModelConfigured(ctx);
+    const reservation = ctx.generationGuard.reserve(req);
+    let committed = false;
     const requestAbort = new AbortController();
     const onClose = () => {
       if (!res.writableEnded) requestAbort.abort(new Error('client disconnected'));
@@ -203,15 +215,18 @@ async function route(req, res, ctx) {
         question: payload.question,
         signal: requestAbort.signal,
       });
+      reservation.commit();
+      committed = true;
       sendJson(res, 200, result);
     } finally {
+      if (!committed) reservation.release();
       req.off('aborted', onClose);
       res.off('close', onClose);
     }
     return;
   }
   if (method === 'POST' && (url.pathname === '/api/challenge' || url.pathname === '/api/personalize-action')) {
-    assertSameOrigin(req, ctx);
+    assertGenerationAccess(req, ctx);
     assertJsonContentType(req);
     const payload = await readJsonBody(req, ctx.maxRequestBytes, ctx.bodyTimeoutMs);
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -243,7 +258,9 @@ async function route(req, res, ctx) {
         throw new LearningServiceError('使用场景过长，请缩短到 1000 字以内。', { code: 'SCENARIO_TOO_LONG', status: 400 });
       }
     }
-    ctx.generationGuard.consume(req);
+    assertModelConfigured(ctx);
+    const reservation = ctx.generationGuard.reserve(req);
+    let committed = false;
     const requestAbort = new AbortController();
     const onClose = () => { if (!res.writableEnded) requestAbort.abort(new Error('client disconnected')); };
     req.on('aborted', onClose); res.on('close', onClose);
@@ -251,8 +268,13 @@ async function route(req, res, ctx) {
       const result = isChallenge
         ? await ctx.service.checkChallenge({ workId: payload.workId, question: payload.question, answer: payload.answer, signal: requestAbort.signal })
         : await ctx.service.personalizeAction({ workId: payload.workId, scenario: payload.scenario, signal: requestAbort.signal });
+      reservation.commit();
+      committed = true;
       sendJson(res, 200, result);
-    } finally { req.off('aborted', onClose); res.off('close', onClose); }
+    } finally {
+      if (!committed) reservation.release();
+      req.off('aborted', onClose); res.off('close', onClose);
+    }
     return;
   }
   if (method === 'GET') {
@@ -298,12 +320,30 @@ function assertSameOrigin(req, { requireOrigin = true, allowedOrigin = '' } = {}
   }
 }
 
+function assertGenerationAccess(req, ctx) {
+  assertSameOrigin(req, ctx);
+  if (!ctx.requireGenerationAuth) return;
+  const authorization = String(req.headers?.authorization || '');
+  const expected = `Bearer ${ctx.generationAuthToken}`;
+  const actualBytes = Buffer.from(authorization);
+  const expectedBytes = Buffer.from(expected);
+  if (!ctx.generationAuthToken || actualBytes.length !== expectedBytes.length || !timingSafeEqual(actualBytes, expectedBytes)) {
+    throw new HttpError(401, 'GENERATION_AUTH_REQUIRED', '生成请求需要有效的访问凭证。');
+  }
+}
+
+function assertModelConfigured(ctx) {
+  const configured = ctx.service.modelConfigured ?? ctx.model.configured;
+  if (!configured) throw new ModelNotConfiguredError();
+}
+
 class GenerationGuard {
   #windowMs;
   #maxPerWindow;
   #maxRequests;
   #now;
   #total = 0;
+  #reserved = 0;
   #clients = new Map();
 
   constructor({ windowMs, maxPerWindow, maxRequests, now = () => Date.now() } = {}) {
@@ -316,9 +356,10 @@ class GenerationGuard {
     this.#now = now;
   }
 
-  consume(req) {
+  reserve(req) {
     const current = this.#now();
-    if (this.#total >= this.#maxRequests) {
+    this.#prune(current);
+    if (this.#total + this.#reserved >= this.#maxRequests) {
       throw new HttpError(429, 'GENERATION_BUDGET_EXCEEDED', '本服务的累计 AI 生成额度已用尽，请稍后由维护者重置或提高上限。');
     }
     const key = `${req.socket?.remoteAddress || 'unknown'}|${req.headers?.origin || 'no-origin'}`;
@@ -332,7 +373,26 @@ class GenerationGuard {
     }
     state.count += 1;
     this.#clients.set(key, state);
-    this.#total += 1;
+    this.#reserved += 1;
+    let settled = false;
+    return {
+      commit: () => {
+        if (settled) return;
+        settled = true;
+        this.#reserved -= 1;
+        this.#total += 1;
+      },
+      release: () => {
+        if (settled) return;
+        settled = true;
+        this.#reserved -= 1;
+        state.count = Math.max(0, state.count - 1);
+        if (state.count === 0) this.#clients.delete(key);
+      },
+    };
+  }
+
+  #prune(current) {
     for (const [clientKey, clientState] of this.#clients) {
       if (current - clientState.windowStart >= this.#windowMs * 2) this.#clients.delete(clientKey);
     }

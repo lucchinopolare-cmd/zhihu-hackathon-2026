@@ -264,7 +264,7 @@ export function validateGeneratedLearning(value, { paragraphs, mode }) {
   assertRecord(value.challenge, 'challenge');
   assertExactKeys(value.challenge, ['question', 'citationIds'], 'challenge');
   const challenge = Object.freeze({
-    question: requireText(value.challenge.question, 'challenge.question'),
+    question: requireBoundedText(value.challenge.question, 'challenge.question', 500),
     citationIds: validateCitationIdArray(value.challenge.citationIds, 'challenge.citationIds', citationIds, { nonEmpty: true }),
   });
 
@@ -477,7 +477,7 @@ const LEARNING_SCHEMA = {
       additionalProperties: false,
       required: ['question', 'citationIds'],
       properties: {
-        question: { type: 'string', minLength: 1 },
+        question: { type: 'string', minLength: 1, maxLength: 500 },
         citationIds: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
       },
     },
@@ -709,6 +709,12 @@ function requireText(value, field, { trim = true } = {}) {
     throw new ModelResponseError(`${field} 缺少有效文字，已拒绝展示。`);
   }
   return trim ? value.trim() : value;
+}
+
+function requireBoundedText(value, field, maxLength, options = {}) {
+  const text = requireText(value, field, options);
+  if (text.length > maxLength) throw new ModelResponseError(`${field} 过长，已拒绝展示。`);
+  return text;
 }
 
 function assertPositiveInteger(value, name) {

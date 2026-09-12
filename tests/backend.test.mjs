@@ -104,6 +104,48 @@ test('generation endpoints enforce per-origin frequency and cumulative request l
   });
 });
 
+test('failed generation releases its reserved cumulative budget', async () => {
+  let calls = 0;
+  const service = {
+    modelConfigured: true,
+    learn: async ({ workId, mode }) => {
+      calls += 1;
+      if (calls === 1) throw Object.assign(new Error('upstream failed'), { status: 502, code: 'MODEL_UPSTREAM_ERROR' });
+      return { workId, mode };
+    },
+  };
+  const app = createApp({
+    contentStore: makeStore(),
+    modelClient: { configured: true, runtimeMode: 'live' },
+    learningService: service,
+    maxGenerationRequests: 1,
+  });
+  await withServer(app, async (base) => {
+    const options = { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ workId: '1', mode: 'direct' }) };
+    const failed = await fetch(`${base}/api/learn`, options);
+    assert.equal(failed.status, 502);
+    const succeeded = await fetch(`${base}/api/learn`, options);
+    assert.equal(succeeded.status, 200);
+  });
+});
+
+test('generation endpoints can require a bearer authorization token', async () => {
+  const app = createApp({
+    contentStore: makeStore(),
+    modelClient: { configured: true, runtimeMode: 'demo' },
+    learningService: { modelConfigured: true, learn: async ({ workId, mode }) => ({ workId, mode }) },
+    generationAuthToken: 'test-token',
+    requireGenerationAuth: true,
+  });
+  await withServer(app, async (base) => {
+    const payload = JSON.stringify({ workId: '1', mode: 'direct' });
+    const missing = await fetch(`${base}/api/learn`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: payload });
+    assert.equal(missing.status, 401);
+    const allowed = await fetch(`${base}/api/learn`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base, authorization: 'Bearer test-token' }, body: payload });
+    assert.equal(allowed.status, 200);
+  });
+});
+
 test('follow-up validates requests and returns a cited answer', async () => {
   const modelClient = {
     configured: true,
