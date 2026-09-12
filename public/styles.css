@@ -60,6 +60,10 @@
 .result-body{margin-top:20px}
 .result-section{margin-bottom:22px}
 .result-section h4{font-size:13px;margin:0 0 7px;color:var(--ink)}
+.result-section-head,.feature-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.evidence-badge{display:inline-block;border-radius:999px;padding:2px 8px;font-size:11px;line-height:1.5;white-space:nowrap;font-weight:700}
+.evidence-source{color:#276749;background:#e8f4ed;border:1px solid #bfe0ca}
+.evidence-ai{color:#795b09;background:#fff1bf;border:1px solid #ead17a}
 .result-section p{margin:0;color:#49586d;font-size:14px;line-height:1.75}
 .citation{display:inline-block;border:0;border-bottom:1px solid #d4b44d;background:var(--cream);color:var(--gold);padding:0 4px;margin:0 2px;font-size:12px;cursor:pointer}
 .feedback-list{list-style:none;margin:0;padding:0}
@@ -148,6 +152,18 @@
 .question-chip:hover{border-color:var(--blue);color:var(--blue)}
 .follow-up-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:9px}
 .follow-up-list{margin-top:17px}
+.challenge-panel{border:1px solid #cfdcf1;background:#fbfcff;padding:17px;margin-top:24px}
+.challenge-panel h3{font-family:var(--serif);font-size:19px;font-weight:500;margin:0}
+.challenge-question{font-size:15px;line-height:1.75;margin:14px 0;color:#334157}
+.challenge-feedback{margin-top:14px}
+.challenge-result{border-left:3px solid #38a169;background:#f2fbf5;padding:10px 12px}
+.challenge-result.revisit{border-left-color:#c18b16;background:#fffaf0}
+.challenge-result strong{font-size:13px}
+.challenge-result p{margin:7px 0 0;font-size:13px;line-height:1.7}
+.challenge-result .evidence-badge{margin-right:7px}
+.variant-question{font-weight:700;color:#795b09}
+.scenario-box{padding:12px;background:#f4f7fc;border:1px solid #dbe5f4;margin-bottom:16px}
+.label-stack{display:flex;flex-direction:column;align-items:flex-end;gap:5px}
 .follow-up-turn{border-left:3px solid var(--blue);background:#fff;padding:13px 15px;margin-top:10px}
 .follow-up-turn strong{display:block;font-size:13px}
 .follow-up-turn p{color:#49586d;font-size:14px;line-height:1.75;margin:5px 0 9px}

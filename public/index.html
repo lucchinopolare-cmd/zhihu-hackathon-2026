@@ -71,8 +71,16 @@
         <div id="result-panel" class="result-panel" hidden>
           <div class="result-head"><div><p id="result-eyebrow" class="kicker">AI 讲解</p><h3 id="result-title">读懂这段内容</h3></div><button id="regenerate" class="button button-quiet" type="button">重新生成</button></div>
           <div id="result-body" class="result-body"></div>
+          <section id="challenge-panel" class="challenge-panel" aria-labelledby="challenge-title">
+            <div class="feature-head"><div><p class="kicker">一分钟理解挑战</p><h3 id="challenge-title">先不看答案，写下你的理解</h3></div><span class="evidence-badge evidence-source">原文理解</span></div>
+            <p id="challenge-question" class="challenge-question"></p>
+            <label class="field-label" for="challenge-answer">你的回答</label>
+            <textarea id="challenge-answer" class="text-input" rows="3" maxlength="2000" placeholder="用一两句话回答即可。"></textarea>
+            <div class="follow-up-actions"><span class="muted-note">不打分，只核对关键点和原文依据。</span><button id="check-challenge" class="button button-quiet" type="button">核对我的回答</button></div>
+            <div id="challenge-feedback" class="challenge-feedback" aria-live="polite"></div>
+          </section>
           <section id="follow-up-panel" class="follow-up-panel" aria-labelledby="follow-up-title">
-            <div><p class="kicker">继续追问 · 仍只基于当前片段</p><h3 id="follow-up-title">把没讲透的地方问下去</h3></div>
+            <div class="feature-head"><div><p class="kicker">继续追问 · 仍只基于当前片段</p><h3 id="follow-up-title">把没讲透的地方问下去</h3></div><span class="evidence-badge evidence-ai">AI 延伸</span></div>
             <div id="question-prompts" class="question-prompts"></div>
             <label class="field-label" for="follow-up-question">你的问题</label>
             <textarea id="follow-up-question" class="text-input" rows="2" maxlength="1000" placeholder="例如：这个观点在什么情况下不成立？"></textarea>
@@ -80,7 +88,7 @@
             <div id="follow-up-list" class="follow-up-list" aria-live="polite"></div>
           </section>
           <div id="revision-panel" class="revision-panel" hidden><label class="field-label" for="revision">修订我的理解 <span>可选，不会覆盖原话</span></label><textarea id="revision" class="text-input" rows="3" maxlength="3000" placeholder="结合依据，补充或调整自己的判断。"></textarea><p class="muted-note">这里的修订保留在学习卡中，尚未重新核对。</p></div>
-          <div class="action-box"><div class="action-head"><div><p class="kicker">AI 行动建议 · 可以修改</p><h3>把理解落到一个小行动</h3></div><span class="pending-badge">待尝试</span></div><label class="field-label" for="action-task">行动</label><textarea id="action-task" class="text-input compact" rows="3" maxlength="2000"></textarea><label class="field-label" for="action-completion">完成标志</label><input id="action-completion" class="text-input" type="text" maxlength="1000"><label class="field-label" for="action-review">回顾安排 <span>可选</span></label><input id="action-review" class="text-input" type="text" maxlength="500" placeholder="例如：明晚 8 点，花 5 分钟回看">
+          <div class="action-box"><div class="action-head"><div><p class="kicker">AI 行动建议 · 可以修改</p><h3>把理解落到一个小行动</h3></div><div class="label-stack"><span class="evidence-badge evidence-ai">AI 延伸</span><span class="pending-badge">待尝试</span></div></div><div class="scenario-box"><label class="field-label" for="action-scenario">换成我的场景 <span>可选</span></label><textarea id="action-scenario" class="text-input compact" rows="2" maxlength="1000" placeholder="例如：下周复习高数极限题，每晚有 30 分钟，总卡在等价无穷小。"></textarea><div class="follow-up-actions"><span class="muted-note">写出具体任务、时间或卡点，调整会更贴合。</span><button id="personalize-action" class="button button-quiet" type="button">按我的场景调整</button></div></div><label class="field-label" for="action-task">行动</label><textarea id="action-task" class="text-input compact" rows="3" maxlength="2000"></textarea><label class="field-label" for="action-completion">完成标志</label><input id="action-completion" class="text-input" type="text" maxlength="1000"><label class="field-label" for="action-review">回顾安排 <span>可选</span></label><input id="action-review" class="text-input" type="text" maxlength="500" placeholder="例如：明晚 8 点，花 5 分钟回看">
           </div>
           <div class="result-actions"><span id="generation-note" class="muted-note">AI 生成 · 基于当前可读片段</span><button id="export-card" class="button button-primary" type="button">导出 Word 学习卡</button></div>
           <p id="reflection-changed" class="muted-note" hidden>上方复述已修改。当前反馈仍对应上一次提交，可点击“帮我核对”更新。</p>

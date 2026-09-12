@@ -1,4 +1,4 @@
-import { validateFollowUp, validateGeneratedLearning } from './model-client.mjs';
+import { validateChallengeCheck, validateFollowUp, validateGeneratedLearning } from './model-client.mjs';
 
 const RESPONSES = {
   '9000000000000000001': {
@@ -20,6 +20,7 @@ const RESPONSES = {
     ],
     questions: ['我现在的目标缺少动作、时间还是结果？', '怎样记录才算得到可用证据？', '下一轮只改哪个变量最值得？'],
     action: ['选一个模糊的学习目标，把它改写成二十分钟内能完成的小实验。', '写清动作、结束时间，并留下一个可查看的结果。', '结束后记录事实，只选择一个变量用于下次调整。'],
+    challenge: ['为什么小实验需要同时写清具体动作、时间边界和观察结果？', 'p2'],
     reflection: {
       concepts: [
         [/(?:写清|包含|改成|加入).{0,8}(?:具体)?动作|动作.{0,6}(?:具体|明确)/, '具体动作', 'p2'],
@@ -59,6 +60,7 @@ const RESPONSES = {
     ],
     questions: ['这句话里哪些是事实，哪些是评价？', '还有哪些解释同样符合已有事实？', '下一步怎样只检验一个解释？'],
     action: ['选一次最近的学习经历，分别写一条事实、一条候选解释和一个下一步。', '事实包含至少一个可观察的时间、数量或行为。', '下一次结束后检查这个解释是否得到更多支持。'],
+    challenge: ['复盘时，为什么要把事实、解释和下一步行动分开？', 'p1'],
     reflection: {
       concepts: [
         [/(?:先|需要|应该|应当|尽量).{0,8}(?:记录|区分).{0,8}(?:可观察)?事实|(?:事实|记录).{0,8}(?:可观察|时间|数量|行为)/, '可观察事实', 'p2'],
@@ -113,7 +115,60 @@ export class DemoModelClient {
       feedback,
       citations,
       action: { task: template.action[0], completion: template.action[1], review: template.action[2] },
+      challenge: (() => {
+        const [question, paragraphId] = template.challenge;
+        const item = cited([['', paragraphId]])[0];
+        return { question, citationIds: item.citationIds };
+      })(),
     }, { paragraphs: article.paragraphs, mode });
+  }
+
+  async checkChallenge({ article, question, answer }) {
+    const template = RESPONSES[article?.workId];
+    if (!template) throw new Error('开发演示模型没有这篇材料的预设结果。');
+    const [challengeQuestion, paragraphId] = template.challenge;
+    const citedText = excerpt(article.paragraphs.find((item) => item.id === paragraphId)?.text || '');
+    const ids = ['动作', '时间', '结果', '事实', '解释', '下一步'].filter((word) => String(answer).includes(word));
+    const needed = article.workId.endsWith('1') ? ['动作', '时间', '结果'] : ['事实', '解释', '下一步'];
+    const complete = needed.every((word) => ids.includes(word));
+    const citation = { id: 'c1', paragraphId, quote: citedText };
+    return validateChallengeCheck({
+      status: complete ? 'ready' : 'revisit',
+      feedback: [{ text: complete ? `你的回答覆盖了“${needed.join('、')}”这些关键点。` : `你的回答还可以补上“${needed.filter((word) => !ids.includes(word)).join('、')}”中的关键点。`, citationIds: ['c1'] }],
+      citations: [citation],
+      variantQuestion: complete ? '' : `请结合材料说明：${challengeQuestion}`,
+    }, { paragraphs: article.paragraphs });
+  }
+
+  async personalizeAction({ article, scenario }) {
+    const template = RESPONSES[article?.workId];
+    if (!template) throw new Error('开发演示模型没有这篇材料的预设结果。');
+    const normalized = String(scenario).trim();
+    if (/高数|数学|微积分|极限|导数|积分/.test(normalized)) {
+      return article.workId.endsWith('1')
+        ? {
+          task: `针对${normalized}，先选定一个具体章节或题型，用 20 分钟完成 3 道基础题，并把卡住的步骤记下来。`,
+          completion: '完成 3 道题，并标出至少 1 个仍不清楚的步骤或概念。',
+          review: '明晚只补 1 个前置概念，再做 1 道同类型题，比较卡点是否变化。',
+        }
+        : {
+          task: `针对${normalized}，选一次最近的练习，记录开始时间、题量和卡住的题型，再提出 2 个可能原因。`,
+          completion: '留下时间、数量、题型三项事实，并写出 2 个候选解释。',
+          review: '下一次只改变 1 个因素，例如先补一个前置概念，再检查同类题的表现。',
+        };
+    }
+    if (/考试|复习|备考|作业|课程|论文/.test(normalized)) {
+      return {
+        task: `针对${normalized}，先选一个最小的可交付子任务，安排 20 分钟完成一次，并留下可查看的结果。`,
+        completion: '完成一个明确产出，并记录 1 个卡点或仍需补充的条件。',
+        review: '根据记录只调整 1 个变量，再安排下一次 20 分钟尝试。',
+      };
+    }
+    return {
+      task: `针对${normalized}，先把目标缩成一个 20 分钟内能完成的具体动作，并留下一个可查看的结果。`,
+      completion: '完成这个具体动作，并留下 1 条可核对的结果或卡点记录。',
+      review: '回看记录后只调整 1 个变量，再做下一次小实验。',
+    };
   }
 
   async followUp({ article, question }) {

@@ -16,6 +16,7 @@ const result = {
   questions: ['哪里可能不成立？', '怎样用到我的情况？'],
   citations: [{ id: 'c1', paragraphId: 'p-2', quote: '原文 [片段] <安全>' }],
   action: { task: '试做一步', completion: '看到结果', review: '明天回顾' },
+  challenge: { question: '为什么要先做小任务？', citationIds: ['c1'] },
 };
 
 test('direct export attributes AI output and does not invent user reflection', () => {
@@ -85,6 +86,30 @@ test('Word export is a styled Office document with the same source attribution',
   assert.match(xmlText, /AI 直接讲解/);
   assert.match(xmlText, /作者的论证步骤/);
   assert.match(xmlText, /application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document/);
+});
+
+test('learning card preserves challenge and personalized action without claiming completion', () => {
+  const card = buildLearningCard({ article, result, challengeAnswer: '因为可以看到结果。', challengeResult: { status: 'revisit', feedback: [{ text: '还可补充条件。' }], variantQuestion: '换一个场景怎么做？' }, scenario: '下周复习', personalizedAction: { action: { task: '先做十分钟', completion: '留下记录', review: '明晚回看' } } });
+  assert.match(card, /一分钟理解挑战/);
+  assert.match(card, /用户回答/);
+  assert.match(card, /变式题/);
+  assert.match(card, /按我的场景调整/);
+  assert.match(card, /待尝试/);
+});
+
+test('scenario-generated action is not duplicated as a user edit', () => {
+  const args = {
+    article,
+    result,
+    scenario: '下周复习',
+    personalizedAction: { action: { task: '先做十分钟', completion: '留下记录', review: '明晚回看' } },
+    task: '先做十分钟', completion: '留下记录', review: '明晚回看', actionEdited: false,
+  };
+  const markdown = buildLearningCard(args);
+  assert.match(markdown, /按我的场景调整/);
+  assert.doesNotMatch(markdown, /用户编辑的行动建议/);
+  const docxText = new TextDecoder().decode(buildLearningCardDocx(args));
+  assert.doesNotMatch(docxText, /用户编辑的行动建议/);
 });
 
 test('Word export preserves demo attribution and reflection feedback labels', () => {

@@ -25,6 +25,9 @@ const MIME_TYPES = {
 };
 const DEFAULT_MAX_REQUEST_BYTES = 64 * 1024;
 const DEFAULT_BODY_TIMEOUT_MS = 15_000;
+const DEFAULT_GENERATION_WINDOW_MS = 60_000;
+const DEFAULT_MAX_GENERATION_PER_WINDOW = 5;
+const DEFAULT_MAX_GENERATION_REQUESTS = 20;
 
 /**
  * Creates the HTTP request listener. Dependencies can be injected for tests;
@@ -38,6 +41,12 @@ export function createApp({
   maxRequestBytes = envInteger('MAX_REQUEST_BYTES', DEFAULT_MAX_REQUEST_BYTES),
   bodyTimeoutMs = envInteger('BODY_TIMEOUT_MS', DEFAULT_BODY_TIMEOUT_MS),
   maxConcurrent = envInteger('MAX_GENERATION_CONCURRENT', 2),
+  generationWindowMs = envInteger('GENERATION_RATE_WINDOW_MS', DEFAULT_GENERATION_WINDOW_MS),
+  maxGenerationPerWindow = envInteger('MAX_GENERATION_PER_WINDOW', DEFAULT_MAX_GENERATION_PER_WINDOW),
+  maxGenerationRequests = envInteger('MAX_GENERATION_REQUESTS', DEFAULT_MAX_GENERATION_REQUESTS),
+  requireOrigin = envBoolean('REQUIRE_ORIGIN', true),
+  allowedOrigin = process.env.ALLOWED_ORIGIN || '',
+  now = () => Date.now(),
 } = {}) {
   const store = contentStore ?? new ContentStore();
   const model = modelClient ?? new ResponsesModelClient({
@@ -50,10 +59,18 @@ export function createApp({
   });
   const service = learningService ?? new LearningService({ contentStore: store, modelClient: model, maxConcurrent });
   const safePublicDir = path.resolve(publicDir);
+  const generationGuard = new GenerationGuard({
+    windowMs: generationWindowMs,
+    maxPerWindow: maxGenerationPerWindow,
+    maxRequests: maxGenerationRequests,
+    now,
+  });
 
   const handler = async (req, res) => {
     try {
-      await route(req, res, { store, model, service, safePublicDir, maxRequestBytes, bodyTimeoutMs });
+      await route(req, res, {
+        store, model, service, safePublicDir, maxRequestBytes, bodyTimeoutMs, generationGuard, requireOrigin, allowedOrigin,
+      });
     } catch (error) {
       if (res.headersSent) {
         res.destroy();
@@ -112,7 +129,7 @@ async function route(req, res, ctx) {
     return;
   }
   if (method === 'POST' && url.pathname === '/api/learn') {
-    assertSameOrigin(req);
+    assertSameOrigin(req, ctx);
     assertJsonContentType(req);
     const payload = await readJsonBody(req, ctx.maxRequestBytes, ctx.bodyTimeoutMs);
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -125,6 +142,13 @@ async function route(req, res, ctx) {
     if (typeof payload.workId !== 'string' || payload.workId.trim() === '') {
       throw new LearningServiceError('workId 必须是非空字符串。', { code: 'INVALID_REQUEST', status: 400 });
     }
+    if (!['direct', 'reflect'].includes(payload.mode)) {
+      throw new LearningServiceError('mode 必须是 direct 或 reflect。', { code: 'INVALID_MODE', status: 400 });
+    }
+    if (payload.mode === 'reflect' && (typeof payload.reflection !== 'string' || payload.reflection.trim() === '')) {
+      throw new LearningServiceError('reflect 模式需要填写非空复述。', { code: 'REFLECTION_REQUIRED', status: 400 });
+    }
+    ctx.generationGuard.consume(req);
     const requestAbort = new AbortController();
     const onClose = () => {
       if (!res.writableEnded) requestAbort.abort(new Error('client disconnected'));
@@ -147,7 +171,7 @@ async function route(req, res, ctx) {
     return;
   }
   if (method === 'POST' && url.pathname === '/api/follow-up') {
-    assertSameOrigin(req);
+    assertSameOrigin(req, ctx);
     assertJsonContentType(req);
     const payload = await readJsonBody(req, ctx.maxRequestBytes, ctx.bodyTimeoutMs);
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -160,6 +184,13 @@ async function route(req, res, ctx) {
     if (typeof payload.workId !== 'string' || payload.workId.trim() === '') {
       throw new LearningServiceError('workId 必须是非空字符串。', { code: 'INVALID_REQUEST', status: 400 });
     }
+    if (typeof payload.question !== 'string' || payload.question.trim() === '') {
+      throw new LearningServiceError('追问内容不能为空。', { code: 'QUESTION_REQUIRED', status: 400 });
+    }
+    if (payload.question.trim().length > 1000) {
+      throw new LearningServiceError('追问内容过长，请缩短到 1000 字以内。', { code: 'QUESTION_TOO_LONG', status: 400 });
+    }
+    ctx.generationGuard.consume(req);
     const requestAbort = new AbortController();
     const onClose = () => {
       if (!res.writableEnded) requestAbort.abort(new Error('client disconnected'));
@@ -177,6 +208,51 @@ async function route(req, res, ctx) {
       req.off('aborted', onClose);
       res.off('close', onClose);
     }
+    return;
+  }
+  if (method === 'POST' && (url.pathname === '/api/challenge' || url.pathname === '/api/personalize-action')) {
+    assertSameOrigin(req, ctx);
+    assertJsonContentType(req);
+    const payload = await readJsonBody(req, ctx.maxRequestBytes, ctx.bodyTimeoutMs);
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new LearningServiceError('请求体必须是 JSON 对象。', { code: 'INVALID_JSON_BODY', status: 400 });
+    }
+    const isChallenge = url.pathname === '/api/challenge';
+    const allowed = isChallenge ? new Set(['workId', 'question', 'answer']) : new Set(['workId', 'scenario']);
+    for (const key of Object.keys(payload)) {
+      if (!allowed.has(key)) throw new LearningServiceError(`请求字段 ${key} 不被支持。`, { code: 'INVALID_REQUEST', status: 400 });
+    }
+    if (typeof payload.workId !== 'string' || payload.workId.trim() === '') {
+      throw new LearningServiceError('workId 必须是非空字符串。', { code: 'INVALID_REQUEST', status: 400 });
+    }
+    if (isChallenge) {
+      if (typeof payload.question !== 'string' || payload.question.trim() === '') {
+        throw new LearningServiceError('挑战问题不能为空。', { code: 'CHALLENGE_REQUIRED', status: 400 });
+      }
+      if (typeof payload.answer !== 'string' || payload.answer.trim() === '') {
+        throw new LearningServiceError('请先写下你的挑战回答。', { code: 'CHALLENGE_ANSWER_REQUIRED', status: 400 });
+      }
+      if (payload.answer.trim().length > 2000) {
+        throw new LearningServiceError('挑战回答过长，请缩短到 2000 字以内。', { code: 'CHALLENGE_ANSWER_TOO_LONG', status: 400 });
+      }
+    } else {
+      if (typeof payload.scenario !== 'string' || payload.scenario.trim() === '') {
+        throw new LearningServiceError('请先写下你想应用的场景。', { code: 'SCENARIO_REQUIRED', status: 400 });
+      }
+      if (payload.scenario.trim().length > 1000) {
+        throw new LearningServiceError('使用场景过长，请缩短到 1000 字以内。', { code: 'SCENARIO_TOO_LONG', status: 400 });
+      }
+    }
+    ctx.generationGuard.consume(req);
+    const requestAbort = new AbortController();
+    const onClose = () => { if (!res.writableEnded) requestAbort.abort(new Error('client disconnected')); };
+    req.on('aborted', onClose); res.on('close', onClose);
+    try {
+      const result = isChallenge
+        ? await ctx.service.checkChallenge({ workId: payload.workId, question: payload.question, answer: payload.answer, signal: requestAbort.signal })
+        : await ctx.service.personalizeAction({ workId: payload.workId, scenario: payload.scenario, signal: requestAbort.signal });
+      sendJson(res, 200, result);
+    } finally { req.off('aborted', onClose); res.off('close', onClose); }
     return;
   }
   if (method === 'GET') {
@@ -205,14 +281,61 @@ async function serveStatic(pathname, res, publicDir) {
   res.end(body);
 }
 
-function assertSameOrigin(req) {
+function assertSameOrigin(req, { requireOrigin = true, allowedOrigin = '' } = {}) {
   const origin = req.headers?.origin;
-  if (!origin) return;
+  if (!origin) {
+    if (requireOrigin) throw new HttpError(403, 'ORIGIN_REQUIRED', '生成请求必须带有同源 Origin。');
+    return;
+  }
   let parsed;
   try { parsed = new URL(origin); } catch { throw new HttpError(403, 'CROSS_ORIGIN_FORBIDDEN', '仅允许同源请求。'); }
+  if (allowedOrigin && origin !== allowedOrigin) {
+    throw new HttpError(403, 'CROSS_ORIGIN_FORBIDDEN', '仅允许配置的应用来源发起请求。');
+  }
   const host = req.headers?.host;
   if (!host || parsed.host !== host || !['http:', 'https:'].includes(parsed.protocol)) {
     throw new HttpError(403, 'CROSS_ORIGIN_FORBIDDEN', '仅允许同源请求。');
+  }
+}
+
+class GenerationGuard {
+  #windowMs;
+  #maxPerWindow;
+  #maxRequests;
+  #now;
+  #total = 0;
+  #clients = new Map();
+
+  constructor({ windowMs, maxPerWindow, maxRequests, now = () => Date.now() } = {}) {
+    if (![windowMs, maxPerWindow, maxRequests].every((value) => Number.isSafeInteger(value) && value > 0)) {
+      throw new TypeError('generation limits must be positive integers.');
+    }
+    this.#windowMs = windowMs;
+    this.#maxPerWindow = maxPerWindow;
+    this.#maxRequests = maxRequests;
+    this.#now = now;
+  }
+
+  consume(req) {
+    const current = this.#now();
+    if (this.#total >= this.#maxRequests) {
+      throw new HttpError(429, 'GENERATION_BUDGET_EXCEEDED', '本服务的累计 AI 生成额度已用尽，请稍后由维护者重置或提高上限。');
+    }
+    const key = `${req.socket?.remoteAddress || 'unknown'}|${req.headers?.origin || 'no-origin'}`;
+    const previous = this.#clients.get(key);
+    const state = !previous || current - previous.windowStart >= this.#windowMs
+      ? { windowStart: current, count: 0 }
+      : previous;
+    if (state.count >= this.#maxPerWindow) {
+      const retryAfter = Math.max(1, Math.ceil((state.windowStart + this.#windowMs - current) / 1000));
+      throw new HttpError(429, 'GENERATION_RATE_LIMITED', '请求过于频繁，请稍后再试。', { retryAfter });
+    }
+    state.count += 1;
+    this.#clients.set(key, state);
+    this.#total += 1;
+    for (const [clientKey, clientState] of this.#clients) {
+      if (current - clientState.windowStart >= this.#windowMs * 2) this.#clients.delete(clientKey);
+    }
   }
 }
 
@@ -275,19 +398,30 @@ function normalizeError(error) {
 }
 
 function sendError(res, error) {
-  sendJson(res, error.status || 500, { error: { code: error.code || 'INTERNAL_ERROR', message: error.message || '服务暂时不可用，请稍后重试。' } });
+  const headers = {};
+  if (error.code === 'GENERATION_RATE_LIMITED' && Number.isSafeInteger(error.cause?.retryAfter)) {
+    headers['Retry-After'] = String(error.cause.retryAfter);
+  }
+  sendJson(res, error.status || 500, { error: { code: error.code || 'INTERNAL_ERROR', message: error.message || '服务暂时不可用，请稍后重试。' } }, headers);
 }
 
-function sendJson(res, status, value) {
+function sendJson(res, status, value, extraHeaders = {}) {
   if (res.headersSent) return;
   const body = JSON.stringify(value);
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...extraHeaders });
   res.end(body);
 }
 
 function envInteger(name, fallback) {
   const value = Number.parseInt(process.env[name] || '', 10);
   return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+function envBoolean(name, fallback) {
+  const value = String(process.env[name] || '').trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(value)) return true;
+  if (['0', 'false', 'no', 'off'].includes(value)) return false;
+  return fallback;
 }
 
 export function startServer(options = {}) {

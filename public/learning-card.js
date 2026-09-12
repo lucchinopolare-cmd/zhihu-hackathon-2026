@@ -78,7 +78,7 @@ function followUpSections(followUps, articleWorkId) {
   return `## 继续追问记录\n${turns.join('\n')}\n\n`;
 }
 
-export function buildLearningCard({ article, result, reflection = '', revision = '', followUps = [], task, completion, review } = {}) {
+export function buildLearningCard({ article, result, reflection = '', revision = '', followUps = [], challengeAnswer = '', challengeResult = null, scenario = '', personalizedAction = null, task, completion, review, actionEdited } = {}) {
   assertInput(article, result);
   const index = citationIndex(result);
   const source = result.source ?? article;
@@ -100,6 +100,14 @@ export function buildLearningCard({ article, result, reflection = '', revision =
   if (Array.isArray(result.questions) && result.questions.length) {
     body.push(`## AI 建议的继续追问\n${result.questions.map((question) => `- ${text(question)}`).join('\n')}\n\n`);
   }
+  if (result.challenge?.question) {
+    body.push(`## 一分钟理解挑战（原文理解）\n- 问题：${text(result.challenge.question)}${citationRefs(result.challenge.citationIds, index)}\n`);
+    if (nonEmpty(challengeAnswer)) body.push(`- 用户回答：${text(challengeAnswer)}\n`);
+    if (challengeResult?.feedback?.length) body.push(`- AI 核对：${challengeResult.feedback.map((item) => `${text(item.text)}${citationRefs(item.citationIds, citationIndex(challengeResult))}`).join('；')}\n`);
+    if (challengeResult?.variantQuestion) body.push(`- 变式题：${text(challengeResult.variantQuestion)}\n`);
+    if (challengeResult?.citations?.length) body.push(`${challengeResult.citations.map((citation, indexValue) => `  - [挑战依据 ${indexValue + 1}]（段落：${text(citation.paragraphId || '未提供')}）${text(citation.quote)}`).join('\n')}\n`);
+    body.push('\n');
+  }
   body.push(followUpSections(followUps, article.workId));
   if (result.mode === 'reflect') {
     if (nonEmpty(reflection)) body.push(`## 用户原始复述\n${text(reflection)}\n\n`);
@@ -109,8 +117,9 @@ export function buildLearningCard({ article, result, reflection = '', revision =
   if (Array.isArray(result.citations) && result.citations.length) body.push(`## 原文依据\n${result.citations.map((c, i) => `- [${i + 1}]（引用 ID：${text(c.id)}；段落：${text(c.paragraphId || '未提供')}）${text(c.quote)}`).join('\n')}\n\n`);
   const aiAction = result.action;
   body.push(actionLines('AI 行动建议（待尝试）', aiAction));
+  if (nonEmpty(scenario) && personalizedAction?.action) body.push(`## 按我的场景调整（AI 延伸，待尝试）\n- 场景：${text(scenario)}\n- 行动：${text(personalizedAction.action.task)}\n- 完成标志：${text(personalizedAction.action.completion)}\n${nonEmpty(personalizedAction.action.review) ? `- 回顾安排：${text(personalizedAction.action.review)}\n` : ''}\n`);
   const edited = { task, completion, review };
-  const hasEdited = ['task', 'completion', 'review'].some((key) => nonEmpty(edited[key]) && nonEmpty(edited[key]) !== nonEmpty(aiAction?.[key]));
+  const hasEdited = actionEdited === true || (actionEdited !== false && ['task', 'completion', 'review'].some((key) => nonEmpty(edited[key]) && nonEmpty(edited[key]) !== nonEmpty(aiAction?.[key])));
   if (hasEdited) body.push(actionLines('用户编辑的行动建议（待尝试）', edited));
   body.push('> “待尝试”不表示行动已经完成；卡片保留 AI 生成标识。\n');
   return header + '\n' + body.join('');
@@ -135,7 +144,7 @@ export function downloadLearningCard(args = {}) {
  */
 export function buildLearningCardDocx(args = {}) {
   buildLearningCard(args); // Reuse the existing content validator before creating the OOXML package.
-  const { article, result, reflection = '', revision = '', followUps = [], task, completion, review } = args;
+  const { article, result, reflection = '', revision = '', followUps = [], challengeAnswer = '', challengeResult = null, scenario = '', personalizedAction = null, task, completion, review, actionEdited } = args;
   const index = citationIndex(result);
   const source = result.source ?? article;
   const modeLabel = result.mode === 'reflect' ? '用户复述后 AI 核对' : 'AI 直接讲解';
@@ -174,6 +183,15 @@ export function buildLearningCardDocx(args = {}) {
     blocks.push(sectionHeading('AI 建议的继续追问'));
     blocks.push(...result.questions.map((question) => docBullet(question)));
   }
+  if (result.challenge?.question) {
+    blocks.push(sectionHeading('一分钟理解挑战（原文理解）'));
+    blocks.push(docBullet(`问题：${result.challenge.question}${docxCitationRefs(result.challenge.citationIds, index)}`));
+    if (nonEmpty(challengeAnswer)) blocks.push(docBullet(`用户回答：${challengeAnswer}`, 1));
+    const challengeIndex = challengeResult ? citationIndex(challengeResult) : new Map();
+    for (const item of challengeResult?.feedback || []) blocks.push(docBullet(`AI 核对：${item.text}${docxCitationRefs(item.citationIds, challengeIndex)}`, 1));
+    if (challengeResult?.variantQuestion) blocks.push(docBullet(`变式题：${challengeResult.variantQuestion}`, 1));
+    for (const [indexValue, citation] of (challengeResult?.citations || []).entries()) blocks.push(docQuote(`[挑战依据 ${indexValue + 1}]（段落：${citation.paragraphId || '未提供'}）${citation.quote}`));
+  }
   if (Array.isArray(followUps) && followUps.length) {
     blocks.push(sectionHeading('继续追问记录'));
     for (const turn of followUps) {
@@ -198,8 +216,13 @@ export function buildLearningCardDocx(args = {}) {
   }
   blocks.push(sectionHeading('AI 行动建议（待尝试）'));
   blocks.push(actionTable(result.action));
+  if (nonEmpty(scenario) && personalizedAction?.action) {
+    blocks.push(sectionHeading('按我的场景调整（AI 延伸，待尝试）'));
+    blocks.push(docParagraph(`场景：${scenario}`));
+    blocks.push(actionTable(personalizedAction.action));
+  }
   const edited = { task, completion, review };
-  const hasEdited = ['task', 'completion', 'review'].some((key) => nonEmpty(edited[key]) && nonEmpty(edited[key]) !== nonEmpty(result.action?.[key]));
+  const hasEdited = actionEdited === true || (actionEdited !== false && ['task', 'completion', 'review'].some((key) => nonEmpty(edited[key]) && nonEmpty(edited[key]) !== nonEmpty(result.action?.[key])));
   if (hasEdited) {
     blocks.push(sectionHeading('用户编辑的行动建议（待尝试）'));
     blocks.push(actionTable(edited));

@@ -47,21 +47,60 @@ test('health, knowledge and detail honor public contract', async () => {
 test('learn validates JSON, same origin, and reports missing model without exposing key', async () => {
   const app = createApp({ contentStore: makeStore(), modelClient: { configured: false, generate: async () => {} } });
   await withServer(app, async (base) => {
-    const missingType = await fetch(`${base}/api/learn`, { method: 'POST', body: '{}' });
+    const missingType = await fetch(`${base}/api/learn`, { method: 'POST', headers: { origin: base }, body: '{}' });
     assert.equal(missingType.status, 415);
     const crossOrigin = await fetch(`${base}/api/learn`, {
       method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
       body: JSON.stringify({ workId: '1', mode: 'direct' }),
     });
     assert.equal(crossOrigin.status, 403);
-    const body = await fetch(`${base}/api/learn`, {
+    const missingOrigin = await fetch(`${base}/api/learn`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workId: '1', mode: 'direct' }),
+    });
+    assert.equal(missingOrigin.status, 403);
+    assert.equal((await missingOrigin.json()).error.code, 'ORIGIN_REQUIRED');
+    const body = await fetch(`${base}/api/learn`, {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: base },
       body: JSON.stringify({ workId: '1', mode: 'direct' }),
     });
     assert.equal(body.status, 503);
     const payload = await body.json();
     assert.equal(payload.error.code, 'MODEL_NOT_CONFIGURED');
     assert.equal(JSON.stringify(payload).includes('Bearer'), false);
+  });
+});
+
+test('generation endpoints enforce per-origin frequency and cumulative request limits', async () => {
+  let now = 0;
+  const service = {
+    learn: async ({ workId, mode }) => ({ workId, mode }),
+    followUp: async () => ({ workId: '1' }),
+  };
+  const app = createApp({
+    contentStore: makeStore(),
+    modelClient: { configured: true, runtimeMode: 'demo' },
+    learningService: service,
+    generationWindowMs: 1000,
+    maxGenerationPerWindow: 1,
+    maxGenerationRequests: 2,
+    now: () => now,
+  });
+  await withServer(app, async (base) => {
+    const options = { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ workId: '1', mode: 'direct' }) };
+    const first = await fetch(`${base}/api/learn`, options);
+    assert.equal(first.status, 200);
+    const tooFast = await fetch(`${base}/api/learn`, options);
+    assert.equal(tooFast.status, 429);
+    assert.equal((await tooFast.json()).error.code, 'GENERATION_RATE_LIMITED');
+    assert.ok(Number(tooFast.headers.get('retry-after')) >= 1);
+    now = 1001;
+    const second = await fetch(`${base}/api/learn`, options);
+    assert.equal(second.status, 200);
+    now = 2002;
+    const overBudget = await fetch(`${base}/api/learn`, options);
+    assert.equal(overBudget.status, 429);
+    assert.equal((await overBudget.json()).error.code, 'GENERATION_BUDGET_EXCEEDED');
   });
 });
 
@@ -78,7 +117,7 @@ test('follow-up validates requests and returns a cited answer', async () => {
   const app = createApp({ contentStore: makeStore(), modelClient });
   await withServer(app, async (base) => {
     const response = await fetch(`${base}/api/follow-up`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
+      method: 'POST', headers: { 'content-type': 'application/json', origin: base },
       body: JSON.stringify({ workId: '1', question: '这是什么意思？' }),
     });
     assert.equal(response.status, 200);
@@ -90,18 +129,43 @@ test('follow-up validates requests and returns a cited answer', async () => {
     assert.equal(result.citations[0].quote, '第一段。');
 
     const empty = await fetch(`${base}/api/follow-up`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
+      method: 'POST', headers: { 'content-type': 'application/json', origin: base },
       body: JSON.stringify({ workId: '1', question: ' ' }),
     });
     assert.equal(empty.status, 400);
     assert.equal((await empty.json()).error.code, 'QUESTION_REQUIRED');
 
     const extra = await fetch(`${base}/api/follow-up`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
+      method: 'POST', headers: { 'content-type': 'application/json', origin: base },
       body: JSON.stringify({ workId: '1', question: '问题', history: [] }),
     });
     assert.equal(extra.status, 400);
     assert.equal((await extra.json()).error.code, 'INVALID_REQUEST');
+  });
+});
+
+test('challenge and scenario action endpoints keep inputs scoped to the selected article', async () => {
+  const modelClient = {
+    configured: true,
+    runtimeMode: 'demo',
+    generate: async () => { throw new Error('unused'); },
+    checkChallenge: async ({ question, answer }) => ({
+      status: 'ready', feedback: [{ text: `核对：${question}/${answer}`, citationIds: ['c1'] }],
+      citations: [{ id: 'c1', paragraphId: 'p1', quote: '第一段。' }], variantQuestion: '',
+    }),
+    personalizeAction: async ({ scenario }) => ({ task: `用于${scenario}`, completion: '看到结果', review: '明天回顾' }),
+  };
+  const app = createApp({ contentStore: makeStore(), modelClient });
+  await withServer(app, async (base) => {
+    const challenge = await fetch(`${base}/api/challenge`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ workId: '1', question: '问题', answer: '回答' }) });
+    assert.equal(challenge.status, 200);
+    assert.equal((await challenge.json()).generationMode, 'demo');
+    const action = await fetch(`${base}/api/personalize-action`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ workId: '1', scenario: '下周复习' }) });
+    assert.equal(action.status, 200);
+    assert.equal((await action.json()).action.task, '用于下周复习');
+    const empty = await fetch(`${base}/api/challenge`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ workId: '1', question: '问题', answer: ' ' }) });
+    assert.equal(empty.status, 400);
+    assert.equal((await empty.json()).error.code, 'CHALLENGE_ANSWER_REQUIRED');
   });
 });
 
@@ -124,7 +188,7 @@ test('request body limit rejects oversized payload', async () => {
   const app = createApp({ contentStore: makeStore(), modelClient: { configured: false, generate: async () => {} }, maxRequestBytes: 32 });
   await withServer(app, async (base) => {
     const response = await fetch(`${base}/api/learn`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workId: '1', mode: 'reflect', reflection: 'x'.repeat(100) }),
+      method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ workId: '1', mode: 'reflect', reflection: 'x'.repeat(100) }),
     });
     assert.equal(response.status, 413);
     assert.equal((await response.json()).error.code, 'REQUEST_TOO_LARGE');

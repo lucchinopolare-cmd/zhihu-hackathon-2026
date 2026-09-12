@@ -85,3 +85,14 @@ test('demo follow-up answers are specific to the selected article', async () => 
   assert.equal(result.citations[0].paragraphId, 'p3');
   assert.match(result.citations[0].quote, /解释可以有多个候选/);
 });
+
+test('demo personalized action changes the plan for a concrete math scenario', async () => {
+  const store = new ContentStore({ mode: 'demo' });
+  const service = new LearningService({ contentStore: store, modelClient: new DemoModelClient() });
+  const result = await service.personalizeAction({ workId: '9000000000000000001', scenario: '下周高数复习，每晚 30 分钟，卡在极限题' });
+  assert.match(result.action.task, /高数/);
+  assert.match(result.action.task, /3 道基础题/);
+  assert.match(result.action.completion, /3 道题/);
+  assert.match(result.action.review, /前置概念/);
+  assert.doesNotMatch(result.action.task, /选一个模糊的学习目标/);
+});

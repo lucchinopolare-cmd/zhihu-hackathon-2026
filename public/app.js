@@ -3,8 +3,8 @@ import { downloadLearningCard } from './learning-card.js';
 const $ = (id) => document.getElementById(id);
 const state = {
   items: [], selectedId: null, article: null, contentMode: 'live', drafts: new Map(),
-  detailController: null, generationController: null, followUpController: null, selectionVersion: 0,
-  generationVersion: 0, followUpVersion: 0, loading: false, followUpLoading: false, expanded: false, retry: null,
+  detailController: null, generationController: null, followUpController: null, challengeController: null, personalizeController: null, selectionVersion: 0,
+  generationVersion: 0, followUpVersion: 0, challengeVersion: 0, personalizeVersion: 0, loading: false, followUpLoading: false, challengeLoading: false, personalizeLoading: false, expanded: false, retry: null,
 };
 const ui = {
   status: $('api-status'), picker: $('article-picker'), list: $('article-list'), search: $('article-search'),
@@ -16,11 +16,13 @@ const ui = {
   progress: $('generation-progress'), expand: $('expand-source'), note: $('session-note'),
   runtimeBadge: $('runtime-badge'), runtimeExplanation: $('runtime-explanation'),
   followUpQuestion: $('follow-up-question'), followUpList: $('follow-up-list'), askFollowUp: $('ask-follow-up'),
+  challengeQuestion: $('challenge-question'), challengeAnswer: $('challenge-answer'), checkChallenge: $('check-challenge'), challengeFeedback: $('challenge-feedback'),
+  actionScenario: $('action-scenario'), personalizeAction: $('personalize-action'),
 };
 
 function draft() {
   if (!state.selectedId) return null;
-  if (!state.drafts.has(state.selectedId)) state.drafts.set(state.selectedId, { mode: 'direct', reflection: '', direct: null, reflect: null, followUps: [] });
+  if (!state.drafts.has(state.selectedId)) state.drafts.set(state.selectedId, { mode: 'direct', reflection: '', direct: null, reflect: null, followUps: [], challengeAnswer: '', challengeResult: null, personalizedAction: null });
   return state.drafts.get(state.selectedId);
 }
 function entry() { const d = draft(); return d ? d[d.mode] : null; }
@@ -151,6 +153,17 @@ function cancelFollowUp() {
   state.followUpLoading = false;
 }
 
+function cancelFeatureRequests() {
+  state.challengeVersion += 1;
+  state.personalizeVersion += 1;
+  state.challengeController?.abort();
+  state.personalizeController?.abort();
+  state.challengeController = null;
+  state.personalizeController = null;
+  state.challengeLoading = false;
+  state.personalizeLoading = false;
+}
+
 async function selectArticle(workId) {
   const previous = state.selectedId;
   const version = ++state.selectionVersion;
@@ -159,6 +172,7 @@ async function selectArticle(workId) {
   state.detailController = controller;
   cancelGeneration();
   cancelFollowUp();
+  cancelFeatureRequests();
   state.selectedId = workId;
   state.article = null;
   state.expanded = false;
@@ -227,8 +241,14 @@ function highlightCitation(citationId) {
 
 function switchMode(mode) {
   if (!draft()) return;
+  const previousMode = draft().mode;
+  if (previousMode === mode) return;
+  draft().reflection = ui.reflection.value;
+  draft().challengeAnswer = ui.challengeAnswer.value;
+  draft().scenario = ui.actionScenario.value;
   cancelGeneration();
   cancelFollowUp();
+  cancelFeatureRequests();
   draft().mode = mode;
   clearError();
   renderMode();
@@ -252,22 +272,28 @@ function renderMode() {
 }
 
 function updateControls() {
-  const disabled = state.loading || state.followUpLoading || !state.article?.paragraphs?.length;
+  const disabled = state.loading || state.followUpLoading || state.challengeLoading || state.personalizeLoading || !state.article?.paragraphs?.length;
   ui.generate.disabled = ui.check.disabled = ui.regenerate.disabled = disabled;
   ui.generate.textContent = state.loading ? '正在阅读…' : 'AI 帮我读懂';
   ui.check.textContent = state.loading ? '正在核对…' : '帮我核对';
   ui.progress.hidden = !state.loading;
   ui.progress.setAttribute('aria-busy', String(state.loading));
-  ui.askFollowUp.disabled = state.loading || state.followUpLoading || !entry();
+  ui.askFollowUp.disabled = state.loading || state.followUpLoading || state.challengeLoading || state.personalizeLoading || !entry();
   ui.askFollowUp.textContent = state.followUpLoading ? '正在回答…' : '继续问';
+  ui.checkChallenge.disabled = state.loading || state.followUpLoading || state.challengeLoading || !entry();
+  ui.checkChallenge.textContent = state.challengeLoading ? '正在核对…' : '核对我的回答';
+  ui.personalizeAction.disabled = state.loading || state.followUpLoading || state.challengeLoading || state.personalizeLoading || !entry();
+  ui.personalizeAction.textContent = state.personalizeLoading ? '正在调整…' : '按我的场景调整';
   const current = entry();
   $('reflection-changed').hidden = !current || draft()?.mode !== 'reflect' || draft().reflection.trim() === current.reflection;
 }
 
-function renderStatements(title, statements, feedback = false) {
+function renderStatements(title, statements, feedback = false, evidenceKind = 'source') {
   if (!statements?.length) return;
   const section = element('section', undefined, 'result-section');
-  section.append(element('h4', title));
+  const heading = element('div', undefined, 'result-section-head');
+  heading.append(element('h4', title), element('span', evidenceKind === 'source' ? '原文理解' : 'AI 延伸', `evidence-badge evidence-${evidenceKind}`));
+  section.append(heading);
   const kinds = { accurate: '理解到位', missing: '可以补充', overreach: '超出依据', uncertain: '仍需辨别' };
   for (const statement of statements) {
     const p = element('p', undefined, 'statement');
@@ -291,7 +317,9 @@ function renderStatements(title, statements, feedback = false) {
 function renderExamples(examples) {
   if (!examples?.length) return;
   const section = element('section', undefined, 'result-section example-section');
-  section.append(element('h4', 'AI 构造的具体场景'));
+  const heading = element('div', undefined, 'result-section-head');
+  heading.append(element('h4', 'AI 构造的具体场景'), element('span', 'AI 延伸', 'evidence-badge evidence-ai'));
+  section.append(heading);
   for (const example of examples) {
     const card = element('div', undefined, 'example-card');
     card.append(element('strong', example.situation));
@@ -337,6 +365,7 @@ function renderFollowUps(result) {
 }
 
 function renderResult(current) {
+  const d = draft();
   const result = current.data;
   const reflect = result.mode === 'reflect';
   const demo = result.generationMode === 'demo';
@@ -345,6 +374,9 @@ function renderResult(current) {
   $('result-title').textContent = reflect ? '把你的理解与原文对照' : '先抓住这段内容的结构';
   ui.regenerate.hidden = reflect;
   ui.resultBody.replaceChildren();
+  ui.challengeQuestion.textContent = result.challenge?.question || '';
+  ui.challengeAnswer.value = d?.challengeAnswer || '';
+  renderChallengeFeedback(d?.challengeResult);
   if (reflect) {
     const original = element('details', undefined, 'original-reflection');
     original.append(element('summary', '本次提交的复述'), element('p', current.reflection));
@@ -353,8 +385,8 @@ function renderResult(current) {
   renderStatements('核心观点', result.summary);
   renderStatements('作者的论证步骤', result.logic);
   renderStatements('适用条件', result.conditions);
-  renderStatements('AI 的批判性提醒', result.cautions);
-  renderStatements('给你的反馈', result.feedback, true);
+  renderStatements('AI 的批判性提醒', result.cautions, false, 'ai');
+  renderStatements('给你的反馈', result.feedback, true, 'ai');
   renderExamples(result.examples);
   renderFollowUps(result);
   $('revision-panel').hidden = !reflect;
@@ -362,11 +394,43 @@ function renderResult(current) {
   ui.task.value = current.task;
   ui.completion.value = current.completion;
   ui.review.value = current.review;
+  ui.actionScenario.value = d?.scenario || '';
   $('generation-note').textContent = demo
     ? demoContent
       ? '开发演示 · 使用项目原创材料与预设回答，不代表赛事内容或赛事模型已开放。'
       : '本地模拟演示 · 结构与真实模型协议一致，不代表赛事模型已接通。'
     : 'AI 生成，可直接导出，也可修改后再带走。';
+}
+
+function renderChallengeFeedback(challenge) {
+  ui.challengeFeedback.replaceChildren();
+  if (!challenge) return;
+  const section = element('div', undefined, `challenge-result ${challenge.status}`);
+  section.append(element('strong', challenge.status === 'ready' ? '关键点已覆盖' : '建议再看一处'));
+  for (const item of challenge.feedback || []) {
+    const p = element('p', undefined, 'statement');
+    p.append(element('span', '原文理解', 'evidence-badge evidence-source'), document.createTextNode(item.text));
+    for (const citationId of item.citationIds || []) {
+      const citation = challenge.citations?.find((entry) => entry.id === citationId);
+      if (!citation) continue;
+      const button = element('button', '查看原文依据', 'citation');
+      button.type = 'button';
+      button.setAttribute('aria-label', `查看挑战核对依据：${citation.quote}`);
+      button.addEventListener('click', () => {
+        state.expanded = true;
+        renderSource(citation);
+        const sourceParagraph = Array.from(ui.content.children).find((node) => node.dataset.paragraphId === citation.paragraphId);
+        sourceParagraph?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'center' });
+        ui.note.textContent = `已定位挑战依据：${citation.quote}`;
+      });
+      p.append(button);
+    }
+    section.append(p);
+  }
+  if (challenge.variantQuestion) {
+    section.append(element('p', `变式题：${challenge.variantQuestion}`, 'variant-question'));
+  }
+  ui.challengeFeedback.append(section);
 }
 
 async function askFollowUp() {
@@ -410,6 +474,91 @@ async function askFollowUp() {
   }
 }
 
+async function checkChallenge() {
+  const current = entry();
+  const activeDraft = draft();
+  const answer = ui.challengeAnswer.value.trim();
+  if (!state.article || !current || state.loading || state.challengeLoading) return;
+  if (!answer) { showError('先写下你的回答', '用一两句话回答即可，再点击核对。'); ui.challengeAnswer.focus(); return; }
+  clearError();
+  const workId = state.article.workId;
+  const question = current.data.challenge.question;
+  const version = ++state.challengeVersion;
+  const controller = new AbortController();
+  state.challengeController = controller;
+  state.challengeLoading = true;
+  activeDraft.challengeAnswer = answer;
+  activeDraft.challengeResult = null;
+  ui.challengeFeedback.replaceChildren();
+  updateControls();
+  try {
+    const data = await api('/api/challenge', { method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workId, question, answer }) });
+    if (version !== state.challengeVersion || workId !== state.selectedId) return;
+    if (activeDraft.challengeAnswer.trim() !== answer) {
+      setStatus('回答已更新，旧核对已忽略', 'ready');
+      ui.note.textContent = '你在等待期间修改了回答，旧的核对结果没有覆盖新内容。';
+      return;
+    }
+    if (data.workId !== workId || data.question !== question || data.answer !== answer) {
+      throw new Error('返回结果与当前挑战不一致，旧核对结果已忽略。');
+    }
+    activeDraft.challengeResult = data;
+    renderChallengeFeedback(data);
+    setStatus('挑战已核对', 'ready');
+  } catch (error) {
+    if (version !== state.challengeVersion || error.name === 'AbortError') return;
+    showError('挑战核对没有完成', error.message, checkChallenge);
+    setStatus('挑战未完成', 'error');
+  } finally {
+    if (version === state.challengeVersion) { state.challengeLoading = false; state.challengeController = null; updateControls(); }
+  }
+}
+
+async function personalizeAction() {
+  const current = entry();
+  const activeDraft = draft();
+  const activeEntry = current;
+  const scenario = ui.actionScenario.value.trim();
+  if (!state.article || !current || state.loading || state.personalizeLoading) return;
+  if (!scenario) { showError('先写下你的场景', '例如课程、考试准备或一个具体任务。'); ui.actionScenario.focus(); return; }
+  clearError();
+  const workId = state.article.workId;
+  const actionSnapshot = { task: current.task, completion: current.completion, review: current.review };
+  const scenarioSnapshot = scenario;
+  const version = ++state.personalizeVersion;
+  const controller = new AbortController();
+  state.personalizeController = controller;
+  state.personalizeLoading = true;
+  updateControls();
+  try {
+    const data = await api('/api/personalize-action', { method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workId, scenario }) });
+    if (version !== state.personalizeVersion || workId !== state.selectedId) return;
+    if (activeDraft.scenario.trim() !== scenarioSnapshot || current.task !== actionSnapshot.task || current.completion !== actionSnapshot.completion || current.review !== actionSnapshot.review) {
+      setStatus('行动已更新，旧调整已忽略', 'ready');
+      ui.note.textContent = '你在等待期间修改了行动，旧的场景化结果没有覆盖新内容。';
+      return;
+    }
+    if (data.workId !== workId || data.scenario !== scenario || !data.action) {
+      throw new Error('返回结果与当前场景不一致，旧调整结果已忽略。');
+    }
+    activeDraft.scenario = scenario;
+    activeDraft.personalizedAction = data;
+    activeEntry.task = data.action.task;
+    activeEntry.completion = data.action.completion;
+    activeEntry.review = data.action.review || '';
+    activeEntry.actionBase = { ...data.action };
+    activeEntry.actionEdited = false;
+    ui.task.value = activeEntry.task; ui.completion.value = activeEntry.completion; ui.review.value = activeEntry.review;
+    setStatus('行动已按场景调整', 'ready');
+  } catch (error) {
+    if (version !== state.personalizeVersion || error.name === 'AbortError') return;
+    showError('场景化行动没有完成', error.message, personalizeAction);
+    setStatus('行动未完成', 'error');
+  } finally {
+    if (version === state.personalizeVersion) { state.personalizeLoading = false; state.personalizeController = null; updateControls(); }
+  }
+}
+
 async function generate() {
   if (!state.article || state.loading || state.followUpLoading || !state.article.paragraphs?.length) return;
   const d = draft();
@@ -435,7 +584,10 @@ async function generate() {
     });
     if (version !== state.generationVersion || workId !== state.selectedId || mode !== draft()?.mode) return;
     if (data.workId !== workId || data.mode !== mode) throw new Error('返回结果与当前内容不一致，请重新生成。');
-    d[mode] = { data, reflection, revision: '', task: data.action.task, completion: data.action.completion, review: data.action.review || '' };
+    d[mode] = {
+      data, reflection, revision: '', task: data.action.task, completion: data.action.completion, review: data.action.review || '',
+      actionBase: { ...data.action }, actionEdited: false,
+    };
     renderMode();
     setStatus('讲解已生成', 'ready');
   } catch (error) {
@@ -455,7 +607,15 @@ ui.direct.addEventListener('click', () => switchMode('direct'));
 ui.reflect.addEventListener('click', () => switchMode('reflect'));
 ui.reflection.addEventListener('input', () => { if (draft()) draft().reflection = ui.reflection.value; updateControls(); });
 for (const [input, field] of [[ui.revision, 'revision'], [ui.task, 'task'], [ui.completion, 'completion'], [ui.review, 'review']]) {
-  input.addEventListener('input', () => { if (entry()) entry()[field] = input.value; });
+  input.addEventListener('input', () => {
+    if (!entry()) return;
+    entry()[field] = input.value;
+    if (['task', 'completion', 'review'].includes(field)) {
+      const current = entry();
+      const base = current.actionBase || current.data?.action || {};
+      current.actionEdited = ['task', 'completion', 'review'].some((key) => (current[key] || '').trim() !== (base[key] || '').trim());
+    }
+  });
 }
 for (const button of [ui.generate, ui.check, ui.regenerate]) button.addEventListener('click', generate);
 $('cancel-generation').addEventListener('click', () => { cancelGeneration(true); updateControls(); });
@@ -468,7 +628,17 @@ $('export-card').addEventListener('click', () => {
     return;
   }
   try {
-    downloadLearningCard({ article: state.article, result: current.data, followUps: draft().followUps, ...current });
+    const d = draft();
+    downloadLearningCard({
+      article: state.article,
+      result: current.data,
+      followUps: d.followUps,
+      challengeAnswer: d.challengeAnswer,
+      challengeResult: d.challengeResult,
+      scenario: d.scenario,
+      personalizedAction: d.personalizedAction,
+      ...current,
+    });
     ui.note.textContent = 'Word 学习卡已导出。行动仍标为待尝试，可以按自己的情况修改。';
     clearError();
   } catch (error) { showError('学习卡暂时无法导出', error.message); }
@@ -484,6 +654,10 @@ ui.picker.addEventListener('click', (event) => {
 ui.search.addEventListener('input', renderPicker);
 $('retry').addEventListener('click', () => { const retry = state.retry; if (retry) retry(); });
 ui.askFollowUp.addEventListener('click', askFollowUp);
+ui.challengeAnswer.addEventListener('input', () => { if (draft()) draft().challengeAnswer = ui.challengeAnswer.value; });
+ui.checkChallenge.addEventListener('click', checkChallenge);
+ui.actionScenario.addEventListener('input', () => { if (draft()) draft().scenario = ui.actionScenario.value; });
+ui.personalizeAction.addEventListener('click', personalizeAction);
 renderMode();
 loadRuntimeState();
 loadList();

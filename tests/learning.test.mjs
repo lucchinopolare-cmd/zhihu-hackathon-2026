@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ResponsesModelClient, ModelNotConfiguredError, ModelTimeoutError, ModelCancelledError, validateFollowUp, validateGeneratedLearning } from '../src/model-client.mjs';
+import { ResponsesModelClient, ModelNotConfiguredError, ModelTimeoutError, ModelCancelledError, validateFollowUp, validateGeneratedLearning, validateChallengeCheck } from '../src/model-client.mjs';
 import { LearningService } from '../src/learning-service.mjs';
 
 const paragraphs = [{ id: 'p1', text: '闭合一个小任务可以带来完结感。' }, { id: 'p2', text: '行动建议应当由用户自行调整。' }];
@@ -17,6 +17,7 @@ function generated({ feedback = [], quote = paragraphs[0].text } = {}) {
     cautions: [{ text: '这只是当前片段支持的解释，仍需结合个人情况判断。', citationIds: [] }],
     examples: [{ situation: '面对一个迟迟没开始的任务。', application: '先把它拆成十分钟内能结束的一步。' }],
     questions: ['这条建议在什么情况下可能不适用？', '我怎样判断这一步已经完成？'],
+    challenge: { question: '为什么要先完成一个小任务？', citationIds: ['c1'] },
     feedback,
     citations: [{ id: 'c1', paragraphId: 'p1', quote }],
     action: { task: '选一个小任务并完成它', completion: '记录完成结果', review: '回顾下一步' },
@@ -125,4 +126,14 @@ test('model client timeout and caller cancellation are distinguishable', async (
 test('unconfigured model fails before any network call', async () => {
   const client = new ResponsesModelClient({ apiKey: '', fetch: async () => { throw new Error('must not call'); } });
   await assert.rejects(client.generate({ article, mode: 'direct' }), ModelNotConfiguredError);
+});
+
+test('challenge validation requires cited feedback and only adds a variant when revisiting', () => {
+  const ready = validateChallengeCheck({
+    status: 'ready', feedback: [{ text: '覆盖关键点', citationIds: ['c1'] }],
+    citations: [{ id: 'c1', paragraphId: 'p1', quote: paragraphs[0].text }], variantQuestion: '',
+  }, { paragraphs });
+  assert.equal(ready.status, 'ready');
+  assert.throws(() => validateChallengeCheck({ ...ready, status: 'ready', variantQuestion: '再答一次' }, { paragraphs }), /不应追加/);
+  assert.throws(() => validateChallengeCheck({ ...ready, status: 'revisit', variantQuestion: '' }, { paragraphs }), /必须提供/);
 });

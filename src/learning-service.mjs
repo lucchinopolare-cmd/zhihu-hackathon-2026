@@ -77,6 +77,7 @@ export class LearningService {
         feedback: mode === 'direct' ? [] : generated.feedback,
         citations: generated.citations,
         action: generated.action,
+        challenge: generated.challenge,
       };
       if (!result.summary.length || !result.action.task || !result.action.completion) {
         throw new LearningServiceError('模型结果不完整，未向用户展示。', { code: 'MODEL_INVALID_RESPONSE', status: 502 });
@@ -126,6 +127,46 @@ export class LearningService {
     } finally {
       this.#active -= 1;
     }
+  }
+
+  async checkChallenge({ workId, question, answer, signal } = {}) {
+    const normalizedQuestion = typeof question === 'string' ? question.trim() : '';
+    const normalizedAnswer = typeof answer === 'string' ? answer.trim() : '';
+    if (!normalizedQuestion) throw new LearningServiceError('挑战问题不能为空。', { code: 'CHALLENGE_REQUIRED', status: 400 });
+    if (!normalizedAnswer) throw new LearningServiceError('请先写下你的挑战回答。', { code: 'CHALLENGE_ANSWER_REQUIRED', status: 400 });
+    if (normalizedAnswer.length > 2000) throw new LearningServiceError('挑战回答过长，请缩短到 2000 字以内。', { code: 'CHALLENGE_ANSWER_TOO_LONG', status: 400 });
+    if (!this.#modelClient.configured) throw new ModelNotConfiguredError();
+    if (typeof this.#modelClient.checkChallenge !== 'function') throw new LearningServiceError('当前模型不支持理解挑战。', { code: 'CHALLENGE_UNAVAILABLE', status: 503 });
+    return this.#runBoundGeneration(signal, async (article) => {
+      const generated = await this.#modelClient.checkChallenge({ article, question: normalizedQuestion, answer: normalizedAnswer, signal });
+      return { workId: article.workId, question: normalizedQuestion, answer: normalizedAnswer, ...generated, generationMode: this.#modelClient.runtimeMode === 'demo' ? 'demo' : 'live', generatedAt: new Date().toISOString() };
+    }, workId, '理解挑战');
+  }
+
+  async personalizeAction({ workId, scenario, signal } = {}) {
+    const normalizedScenario = typeof scenario === 'string' ? scenario.trim() : '';
+    if (!normalizedScenario) throw new LearningServiceError('请先写下你想应用的场景。', { code: 'SCENARIO_REQUIRED', status: 400 });
+    if (normalizedScenario.length > 1000) throw new LearningServiceError('使用场景过长，请缩短到 1000 字以内。', { code: 'SCENARIO_TOO_LONG', status: 400 });
+    if (!this.#modelClient.configured) throw new ModelNotConfiguredError();
+    if (typeof this.#modelClient.personalizeAction !== 'function') throw new LearningServiceError('当前模型不支持场景化行动。', { code: 'PERSONALIZE_UNAVAILABLE', status: 503 });
+    return this.#runBoundGeneration(signal, async (article) => {
+      const action = await this.#modelClient.personalizeAction({ article, scenario: normalizedScenario, signal });
+      return { workId: article.workId, scenario: normalizedScenario, action, generationMode: this.#modelClient.runtimeMode === 'demo' ? 'demo' : 'live', generatedAt: new Date().toISOString() };
+    }, workId, '场景化行动');
+  }
+
+  async #runBoundGeneration(signal, run, workId, label) {
+    if (this.#active >= this.#maxConcurrent) throw new GenerationBusyError();
+    this.#active += 1;
+    try {
+      if (signal?.aborted) throw new LearningServiceError(`${label}请求已取消。`, { code: 'GENERATION_CANCELLED', status: 499 });
+      const article = await this.#contentStore.detail(workId);
+      if (signal?.aborted) throw new LearningServiceError(`${label}请求已取消。`, { code: 'GENERATION_CANCELLED', status: 499 });
+      return Object.freeze(await run(article));
+    } catch (error) {
+      if (error instanceof LearningServiceError || error instanceof ModelClientError) throw error;
+      throw new LearningServiceError(`${label}没有完成，请稍后手动重试。`, { code: error?.code || 'GENERATION_ERROR', status: error?.status || 502, cause: error });
+    } finally { this.#active -= 1; }
   }
 }
 
