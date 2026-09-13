@@ -1,0 +1,48 @@
+# syntax=docker/dockerfile:1
+
+# Demo-mode image. It reuses the same build and runtime shape as the default
+# Dockerfile and only swaps the entrypoint to src/demo-server.mjs, which wires
+# the project-authored demo content store and the offline DemoModelClient.
+#
+# Why a separate file: the default image runs src/server.mjs, which requires a
+# real model credential. Without a key, generation fails with HTTP 503, so the
+# default image cannot serve an operable public demo. This image is operable
+# with no credential at all and never calls the contest model or content API.
+FROM node:24-bookworm-slim AS build
+
+WORKDIR /app
+
+COPY package.json ./
+COPY src ./src
+COPY public ./public
+
+RUN set -eux; \
+    for file in src/*.mjs; do node --check "$file"; done; \
+    test -s public/index.html
+
+FROM node:24-bookworm-slim AS runtime
+
+# No model or content credential is referenced here. ZHIHU_CONTENT_MODE is not
+# set to live: demo-server.mjs pins the demo content store on its own.
+ENV NODE_ENV=production \
+    HOST=0.0.0.0 \
+    PORT=3000
+
+WORKDIR /app
+
+COPY --from=build --chown=node:node /app/package.json ./package.json
+COPY --from=build --chown=node:node /app/src ./src
+COPY --from=build --chown=node:node /app/public ./public
+
+# The official Node image provides this unprivileged user. No request-serving
+# process in the image runs as root.
+USER node
+
+EXPOSE 3000
+
+# Liveness only: /api/health reports process health. In this image it also
+# reports generationMode=demo and contentMode=demo, which is the honest state.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || '3000') + '/api/health').then(async r => { await r.arrayBuffer(); if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
+
+CMD ["node", "src/demo-server.mjs"]
