@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ResponsesModelClient, ModelNotConfiguredError, ModelTimeoutError, ModelCancelledError, validateFollowUp, validateGeneratedLearning, validateChallengeCheck } from '../src/model-client.mjs';
+import { ResponsesModelClient, ModelClientError, ModelNotConfiguredError, ModelTimeoutError, ModelCancelledError, validateFollowUp, validateGeneratedLearning, validateChallengeCheck } from '../src/model-client.mjs';
 import { LearningService } from '../src/learning-service.mjs';
 
 const paragraphs = [{ id: 'p1', text: '闭合一个小任务可以带来完结感。' }, { id: 'p2', text: '行动建议应当由用户自行调整。' }];
@@ -126,6 +126,77 @@ test('model client timeout and caller cancellation are distinguishable', async (
 test('unconfigured model fails before any network call', async () => {
   const client = new ResponsesModelClient({ apiKey: '', fetch: async () => { throw new Error('must not call'); } });
   await assert.rejects(client.generate({ article, mode: 'direct' }), ModelNotConfiguredError);
+});
+
+test('classifies provider 403 quota errors without exposing upstream details', async (t) => {
+  const cases = [
+    {
+      name: 'insufficient_quota',
+      body: { error: { type: 'insufficient_quota', code: 'insufficient_quota', message: 'Quota exhausted for this account.' } },
+      expected: 'MODEL_RATE_LIMITED',
+    },
+    {
+      name: 'invalid_api_key',
+      body: { error: { type: 'invalid_request_error', code: 'invalid_api_key', message: 'The API key is invalid.' } },
+      expected: 'MODEL_AUTH_ERROR',
+    },
+  ];
+  for (const { name, body, expected } of cases) {
+    await t.test(name, async () => {
+      const client = new ResponsesModelClient({
+        apiKey: 'test-secret-key',
+        fetch: async () => new Response(JSON.stringify(body), {
+          status: 403,
+          headers: { 'content-type': 'application/json' },
+        }),
+      });
+      await assert.rejects(
+        client.generate({ article, mode: 'direct' }),
+        (error) => {
+          assert.ok(error instanceof ModelClientError);
+          assert.equal(error.code, expected);
+          assert.equal(error.status, 503);
+          assert.equal(error.message.includes('test-secret-key'), false);
+          assert.equal(error.message.includes(body.error.message), false);
+          return true;
+        },
+      );
+    });
+  }
+});
+
+test('falls back to authentication for empty or non-JSON provider 403 responses', async (t) => {
+  for (const [name, response] of [
+    ['empty', new Response('', { status: 403 })],
+    ['non-JSON', new Response('forbidden', { status: 403, headers: { 'content-type': 'text/plain' } })],
+  ]) {
+    await t.test(name, async () => {
+      const client = new ResponsesModelClient({
+        apiKey: 'test-secret-key',
+        fetch: async () => response,
+      });
+      await assert.rejects(client.generate({ article, mode: 'direct' }), (error) => {
+        assert.equal(error.code, 'MODEL_AUTH_ERROR');
+        assert.equal(error.status, 503);
+        return true;
+      });
+    });
+  }
+});
+
+test('keeps HTTP 429 mapped to the existing rate-limit error', async () => {
+  const client = new ResponsesModelClient({
+    apiKey: 'test-secret-key',
+    fetch: async () => new Response(JSON.stringify({ error: { code: 'rate_limit_exceeded' } }), {
+      status: 429,
+      headers: { 'content-type': 'application/json' },
+    }),
+  });
+  await assert.rejects(client.generate({ article, mode: 'direct' }), (error) => {
+    assert.equal(error.code, 'MODEL_RATE_LIMITED');
+    assert.equal(error.status, 503);
+    return true;
+  });
 });
 
 test('challenge validation requires cited feedback and only adds a variant when revisiting', () => {

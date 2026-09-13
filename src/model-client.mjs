@@ -190,7 +190,14 @@ export class ResponsesModelClient {
           status: 502,
         });
       }
-      if (!response.ok) throw upstreamStatusError(response.status);
+      if (!response.ok) {
+        // Read a bounded, structured error body so providers that signal an
+        // exhausted quota with HTTP 403 can be distinguished from bad keys.
+        // The body is only used for classification; it is never returned to
+        // callers or included in an error message.
+        const details = await readUpstreamErrorDetails(response, this.#maxResponseBytes);
+        throw upstreamStatusError(response.status, details);
+      }
 
       let payload;
       try {
@@ -630,13 +637,39 @@ function extractOutputText(payload) {
   return output;
 }
 
-function upstreamStatusError(status) {
-  if (status === 401 || status === 403) {
+async function readUpstreamErrorDetails(response, maxBytes) {
+  try {
+    const text = await readResponseText(response, maxBytes);
+    const payload = JSON.parse(text);
+    const error = payload?.error;
+    if (!error || typeof error !== 'object' || Array.isArray(error)) return {};
+    return {
+      type: shortUpstreamField(error.type),
+      code: shortUpstreamField(error.code),
+      message: shortUpstreamField(error.message),
+    };
+  } catch {
+    // Error bodies are best-effort only. A malformed, absent, or oversized
+    // body must not hide the status-based fallback classification.
+    return {};
+  }
+}
+
+const UPSTREAM_ERROR_FIELD_MAX_LENGTH = 256;
+
+function shortUpstreamField(value) {
+  return typeof value === 'string' && value.length <= UPSTREAM_ERROR_FIELD_MAX_LENGTH
+    ? value.trim()
+    : '';
+}
+
+function upstreamStatusError(status, details = {}) {
+  if (status === 401 || (status === 403 && !isQuotaError(details))) {
     return new ModelClientError('模型服务鉴权失败，请联系维护者检查密钥配置。', {
       code: 'MODEL_AUTH_ERROR', status: 503,
     });
   }
-  if (status === 429) {
+  if (status === 429 || (status === 403 && isQuotaError(details))) {
     return new ModelClientError('模型服务当前限流或额度不足，请稍后手动重试。', {
       code: 'MODEL_RATE_LIMITED', status: 503,
     });
@@ -644,6 +677,16 @@ function upstreamStatusError(status) {
   return new ModelClientError('模型服务暂时不可用，请稍后手动重试。', {
     code: 'MODEL_UPSTREAM_ERROR', status: 502,
   });
+}
+
+function isQuotaError({ type = '', code = '', message = '' } = {}) {
+  const text = [type, code, message]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+    .replaceAll('_', ' ')
+    .replaceAll('-', ' ');
+  return /(?:insufficient\s+quota|quota\s+(?:limit(?:ed)?|exceeded|exhaust(?:ed|ion)?|deplet(?:ed|ion)?|insufficient)|(?:limit(?:ed)?|exceeded|exhaust(?:ed|ion)?|deplet(?:ed|ion)?|insufficient)\s+quota|(?:credit|billing)\s+(?:limit(?:ed)?|exceeded|exhaust(?:ed|ion)?|deplet(?:ed|ion)?|insufficient|hard\s+limit)|(?:limit(?:ed)?|exceeded|exhaust(?:ed|ion)?|deplet(?:ed|ion)?|insufficient)\s+(?:credit|billing)|rate\s+limit|too\s+many\s+requests|额度不足|配额不足|余额不足)/u.test(text);
 }
 
 function translateTransportError(error, { timedOut, externalSignal, signal, timeoutMs }) {

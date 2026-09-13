@@ -1,0 +1,27 @@
+# Credentials and machine-local material must never enter the build context.
+.env
+.env.*
+!.env.example
+.local/
+.cache/
+sources/
+.npmrc
+*.pem
+*.key
+
+# Source control, local dependencies and generated output.
+.git/
+.gitignore
+node_modules/
+coverage/
+*.log
+
+# Not needed by the production image (the builder only receives runtime files).
+tests/
+scripts/
+docs/
+vendor/
+AGENTS.md
+项目档案.md
+README.md
+CONTRIBUTING.md

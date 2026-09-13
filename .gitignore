@@ -10,3 +10,6 @@ coverage/
 sources/
 # 含个人课表的早期草案保留在本机；团队版本见 docs/项目方向草案.md
 docs/参赛方案-v0.1.md
+# Agent 会话临时工作目录与浏览器自动化产物，不属于项目交付
+2026-09-13-9047bd96/
+.playwright-mcp/
