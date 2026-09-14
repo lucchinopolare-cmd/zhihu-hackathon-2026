@@ -21,7 +21,4 @@ tests/
 scripts/
 docs/
 vendor/
-AGENTS.md
-项目档案.md
-README.md
-CONTRIBUTING.md
+*.md

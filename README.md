@@ -25,10 +25,15 @@
 
 ```powershell
 npm.cmd run demo
-npm.cmd test
 ```
 
 运行演示后访问 <http://127.0.0.1:3001/>。
+
+在另一个终端运行测试：
+
+```powershell
+npm.cmd test
+```
 
 ## 公开文档
 
